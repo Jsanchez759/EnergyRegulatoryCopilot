@@ -10,7 +10,10 @@ class Settings(BaseSettings):
 
     # CORS defaults for local development. Update for production.
     ALLOWED_ORIGINS: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
-    ALLOWED_ORIGIN_REGEX: str = r"^https?://(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?$"
+    ALLOWED_ORIGIN_REGEX: str = (
+        r"^https?://(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?$"
+        r"|^https://([a-zA-Z0-9-]+\.)*vercel\.app$"
+    )
 
     # OpenRouter-compatible OpenAI client settings.
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
