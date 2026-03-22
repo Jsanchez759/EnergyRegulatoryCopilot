@@ -33,6 +33,12 @@ def setup_logging() -> None:
                 "uvicorn.access": {
                     "level": settings.LOG_LEVEL,
                 },
+                # Chroma telemetry occasionally logs noisy internal errors even when
+                # anonymized telemetry is disabled. Suppress those in production logs.
+                "chromadb.telemetry.product.posthog": {
+                    "level": "CRITICAL",
+                    "propagate": False,
+                },
             },
             "root": {
                 "handlers": ["console"],

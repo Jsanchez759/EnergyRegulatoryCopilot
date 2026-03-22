@@ -80,7 +80,12 @@ async function consumeSseResponse(response, onEvent) {
 
 function historyForApi(messages) {
   return messages
-    .filter((item) => item.role === "user" || item.role === "assistant")
+    .filter(
+      (item) =>
+        (item.role === "user" || item.role === "assistant") &&
+        typeof item.content === "string" &&
+        item.content.trim().length > 0
+    )
     .slice(-12)
     .map((item) => ({ role: item.role, content: item.content }));
 }
@@ -301,8 +306,8 @@ export default function App() {
             <p className="kicker">Acceso</p>
             <h1>Chat de Regulacion Energetica Colombiana</h1>
             <p className="aside-note">
-              Para iniciar, ingresa tu <code>OPENROUTER_API_KEY</code>. La URL del backend se encuentra
-              preconfigurada en el entorno de despliegue.
+              Para comenzar, ingresa tu <code>OPENROUTER_API_KEY</code>. Esta clave permite autenticar tus
+              consultas y habilitar las respuestas del asistente en tiempo real.
             </p>
             <p className="aside-note">
               Instructivo para obtener tu clave:
