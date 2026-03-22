@@ -27,10 +27,24 @@ share/python-wheels/
 MANIFEST
 
 # React + Vite frontend
+# Node
 node_modules/
-package.json
-package-lock.json
-public/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build
+dist/
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
 
 # PyInstaller
 #   Usually these files are written by a python script from a template
