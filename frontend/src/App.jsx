@@ -91,9 +91,8 @@ function historyForApi(messages) {
 }
 
 export default function App() {
-  const [isConfigured, setIsConfigured] = useState(false);
   const [openRouterApiKey, setOpenRouterApiKey] = useState("");
-  const [isChangingApiKey, setIsChangingApiKey] = useState(false);
+  const [showApiHint, setShowApiHint] = useState(false);
   const [theme, setTheme] = useState(localStorage.getItem("erc_theme") || "light");
   const [showLeftPanel, setShowLeftPanel] = useState(true);
   const [showDocsPanel, setShowDocsPanel] = useState(true);
@@ -110,6 +109,7 @@ export default function App() {
   const [chats, setChats] = useState([createChat()]);
   const [activeChatId, setActiveChatId] = useState("");
   const listRef = useRef(null);
+  const isApiKeyMissing = openRouterApiKey.trim().length === 0;
 
   useEffect(() => {
     if (!activeChatId && chats.length) setActiveChatId(chats[0].id);
@@ -121,9 +121,9 @@ export default function App() {
   }, [theme]);
 
   useEffect(() => {
-    if (!isConfigured) return;
+    if (isApiKeyMissing) return;
     void loadDocuments();
-  }, [isConfigured]);
+  }, [isApiKeyMissing]);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
@@ -181,6 +181,11 @@ export default function App() {
 
   async function onUploadDocument(event) {
     event.preventDefault();
+    if (isApiKeyMissing) {
+      setShowApiHint(true);
+      setSidebarStatus("Debes ingresar tu OPENROUTER_API_KEY para continuar.");
+      return;
+    }
     if (!pdfFile) {
       setSidebarStatus("Selecciona un PDF antes de subir.");
       return;
@@ -205,6 +210,11 @@ export default function App() {
   async function onSendMessage(event) {
     event.preventDefault();
     const question = input.trim();
+    if (isApiKeyMissing) {
+      setShowApiHint(true);
+      setStreamStatus("API key requerida");
+      return;
+    }
     if (!question || isSending || !activeChatId) return;
 
     const userMessage = {
@@ -233,7 +243,6 @@ export default function App() {
           references: [],
           meta: mode === "rag" ? "Respuesta RAG" : "Respuesta Ask",
           time: nowLabel(),
-          streamState: "streaming",
         },
       ]);
 
@@ -272,9 +281,6 @@ export default function App() {
           );
         }
         if (evt.done) {
-          updateActiveChat((prev) =>
-            prev.map((item) => (item.id === assistantId ? { ...item, streamState: "done" } : item))
-          );
           setStreamStatus("finalizado");
         }
       });
@@ -299,57 +305,9 @@ export default function App() {
   return (
     <div className="app">
       <div className="bg-layer" />
-
-      {!isConfigured ? (
-        <main className="setup-shell">
-          <section className="setup-card">
-            <p className="kicker">Acceso</p>
-            <h1>Chat de Regulacion Energetica Colombiana</h1>
-            <p className="aside-note">
-              Para comenzar, ingresa tu <code>OPENROUTER_API_KEY</code>. Esta clave permite autenticar tus
-              consultas y habilitar las respuestas del asistente en tiempo real.
-            </p>
-            <p className="aside-note">
-              Instructivo para obtener tu clave:
-              {" "}
-              <a href="https://www.youtube.com/watch?v=ZELx_OzYAQo" target="_blank" rel="noreferrer">
-                video paso a paso
-              </a>
-              {" "}
-              y
-              {" "}
-              <a href="https://openrouter.ai/" target="_blank" rel="noreferrer">
-                portal oficial de OpenRouter
-              </a>
-              .
-            </p>
-            <form
-              className="setup-form"
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (!openRouterApiKey.trim()) return;
-                setIsConfigured(true);
-                setIsChangingApiKey(false);
-              }}
-            >
-              <label>OPENROUTER_API_KEY</label>
-              <input
-                type="password"
-                value={openRouterApiKey}
-                onChange={(e) => setOpenRouterApiKey(e.target.value)}
-                placeholder="sk-or-v1-..."
-              />
-              <button type="submit" disabled={!openRouterApiKey.trim()}>
-                Entrar al chat
-              </button>
-            </form>
-          </section>
-        </main>
-      ) : null}
-
       <main
         className={`shell three-cols ${showLeftPanel ? "" : "hide-left"} ${showDocsPanel ? "" : "hide-right"}`}
-        style={{ display: isConfigured ? "grid" : "none" }}
+        style={{ display: "grid" }}
       >
         {showLeftPanel ? (
           <aside className="left-pane">
@@ -386,8 +344,8 @@ export default function App() {
         <section className="chat-pane">
           <header className="chat-header">
             <div>
-              <p className="kicker">Interfaz de Chat</p>
-              <h1>Asistente Conversacional para Regulacion Energetica</h1>
+              <p className="kicker">EnerCol Chat</p>
+              <h1>Consultor IA de Normativa CREG y Mercado Electrico</h1>
             </div>
             <div className="mode-switch">
               {!showLeftPanel ? (
@@ -412,10 +370,38 @@ export default function App() {
           <div className="connection-row">
             <label>API Key</label>
             <div className="key-badge">
-              <span>**************</span>
-              <button type="button" className="ghost mini" onClick={() => setIsChangingApiKey((v) => !v)}>
-                Cambiar API key
+              <input
+                type="password"
+                value={openRouterApiKey}
+                onChange={(e) => setOpenRouterApiKey(e.target.value)}
+                placeholder="sk-or-v1-..."
+              />
+              <button
+                type="button"
+                className="ghost mini"
+                onClick={() => setShowApiHint((v) => !v)}
+              >
+                ?
               </button>
+              {showApiHint ? (
+                <div className="api-popover">
+                  <p>
+                    Debes ingresar tu <code>OPENROUTER_API_KEY</code> para usar el chat.
+                  </p>
+                  <p>
+                    Esta app usa modelos <strong>free</strong> de OpenRouter.
+                  </p>
+                  <p className="aside-note">
+                    <a href="https://www.youtube.com/watch?v=ZELx_OzYAQo" target="_blank" rel="noreferrer">
+                      Video paso a paso
+                    </a>
+                    {" · "}
+                    <a href="https://openrouter.ai/" target="_blank" rel="noreferrer">
+                      Portal oficial
+                    </a>
+                  </p>
+                </div>
+              ) : null}
             </div>
             <label>Tema</label>
             <button type="button" className="ghost mini" onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))}>
@@ -428,20 +414,6 @@ export default function App() {
               </>
             ) : null}
           </div>
-
-          {isChangingApiKey ? (
-            <div className="api-key-edit">
-              <input
-                type="password"
-                value={openRouterApiKey}
-                onChange={(e) => setOpenRouterApiKey(e.target.value)}
-                placeholder="Nueva OPENROUTER_API_KEY"
-              />
-              <button type="button" className="ghost mini" onClick={() => setIsChangingApiKey(false)}>
-                Guardar y ocultar
-              </button>
-            </div>
-          ) : null}
 
           <div className="stream-badge">Estado streaming: {streamStatus}</div>
 

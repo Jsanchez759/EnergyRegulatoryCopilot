@@ -56,59 +56,6 @@ body {
   pointer-events: none;
 }
 
-.setup-shell {
-  position: relative;
-  z-index: 1;
-  min-height: 100vh;
-  display: grid;
-  place-items: center;
-  padding: 16px;
-}
-
-.setup-card {
-  width: min(620px, 100%);
-  border-radius: 18px;
-  border: 1px solid var(--line);
-  background: var(--panel);
-  box-shadow: 0 16px 36px rgba(23, 46, 27, 0.16);
-  padding: 22px;
-}
-
-.setup-card h1 {
-  margin: 6px 0 8px;
-  font-family: "Merriweather", serif;
-}
-
-.setup-form {
-  display: grid;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-.setup-form input {
-  border: 1px solid var(--line);
-  background: color-mix(in oklab, var(--panel) 92%, white 8%);
-  color: var(--ink);
-  border-radius: 10px;
-  padding: 10px;
-}
-
-.setup-form button {
-  margin-top: 6px;
-  border: none;
-  border-radius: 10px;
-  padding: 10px 12px;
-  font-weight: 700;
-  background: linear-gradient(90deg, var(--brand), #0d8f4d);
-  color: #fff;
-  cursor: pointer;
-}
-
-.setup-form button:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
 .shell {
   position: relative;
   z-index: 1;
@@ -148,17 +95,6 @@ body {
   flex-direction: column;
   gap: 8px;
   transition: opacity 180ms ease, transform 180ms ease;
-}
-
-.left-pane.collapsed {
-  opacity: 0;
-  transform: translateX(-8px);
-  pointer-events: none;
-  width: 0;
-  min-width: 0;
-  padding: 0;
-  border: 0;
-  overflow: hidden;
 }
 
 .left-head {
@@ -213,17 +149,6 @@ body {
   transition: opacity 180ms ease, transform 180ms ease;
 }
 
-.docs-pane.collapsed {
-  opacity: 0;
-  transform: translateX(8px);
-  pointer-events: none;
-  width: 0;
-  min-width: 0;
-  padding: 0;
-  border: 0;
-  overflow: hidden;
-}
-
 .mode-switch button {
   border: 1px solid rgba(255, 255, 255, 0.24);
   background: rgba(255, 255, 255, 0.08);
@@ -267,14 +192,40 @@ body {
   display: inline-flex;
   gap: 6px;
   align-items: center;
+  position: relative;
 }
 
-.key-badge span {
+.key-badge span,
+.key-badge input {
   border: 1px solid var(--line);
   border-radius: 9px;
   padding: 8px 10px;
   min-width: 130px;
   font-weight: 700;
+  background: color-mix(in oklab, var(--panel) 90%, white 10%);
+  color: var(--ink);
+}
+
+.api-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  width: min(360px, 80vw);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.2);
+  padding: 10px;
+  z-index: 5;
+}
+
+.api-popover p {
+  margin: 0 0 8px;
+  font-size: 0.84rem;
+}
+
+.api-popover p:last-child {
+  margin-bottom: 0;
 }
 
 .stream-badge {
@@ -386,10 +337,6 @@ body[data-theme="dark"] .message-list {
 .ref-chunk {
   padding: 0 10px 10px;
   font-size: 0.88rem;
-}
-
-.actions-row {
-  margin-top: 8px;
 }
 
 .composer {
@@ -546,22 +493,6 @@ body[data-theme="dark"] .message-list {
   margin: 0 0 6px;
   font-size: 0.84rem;
   color: var(--muted);
-}
-
-.api-key-edit {
-  border-bottom: 1px solid var(--line);
-  padding: 8px 16px;
-  display: flex;
-  gap: 8px;
-}
-
-.api-key-edit input {
-  flex: 1;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 8px;
-  background: color-mix(in oklab, var(--panel) 90%, white 10%);
-  color: var(--ink);
 }
 
 .upload-form {
