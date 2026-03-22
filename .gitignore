@@ -26,6 +26,12 @@ share/python-wheels/
 *.egg
 MANIFEST
 
+# React + Vite frontend
+node_modules/
+package.json
+package-lock.json
+public/
+
 # PyInstaller
 #   Usually these files are written by a python script from a template
 #   before PyInstaller builds the exe, so as to inject date/other infos into it.
@@ -214,3 +220,4 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+backend/storage/
