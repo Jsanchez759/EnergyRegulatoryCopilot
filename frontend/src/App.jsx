@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-const BASE_URL = "http://127.0.0.1:8000/api/v1";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
 function safeError(error) {
   return error?.message || "Error inesperado.";
@@ -163,7 +163,7 @@ export default function App() {
     setIsLoadingDocs(true);
     setSidebarStatus("Cargando documentos...");
     try {
-      const data = await requestJson(`${BASE_URL}/rag/documents`, {}, openRouterApiKey);
+      const data = await requestJson(`${API_BASE_URL}/rag/documents`, {}, openRouterApiKey);
       const docs = data.documents || [];
       setDocuments(docs);
       setSidebarStatus(docs.length ? "" : "No hay documentos indexados todavia.");
@@ -186,7 +186,7 @@ export default function App() {
     try {
       const formData = new FormData();
       formData.append("file", pdfFile);
-      const result = await requestJson(`${BASE_URL}/rag/documents/upload`, { method: "POST", body: formData }, openRouterApiKey);
+      const result = await requestJson(`${API_BASE_URL}/rag/documents/upload`, { method: "POST", body: formData }, openRouterApiKey);
       setPdfFile(null);
       setSidebarStatus(`Documento indexado: ${result.filename} (${result.chunks_indexed} chunks).`);
       await loadDocuments();
@@ -232,7 +232,7 @@ export default function App() {
         },
       ]);
 
-      const target = mode === "rag" ? `${BASE_URL}/rag/ask/stream` : `${BASE_URL}/questions/ask/stream`;
+      const target = mode === "rag" ? `${API_BASE_URL}/rag/ask/stream` : `${API_BASE_URL}/questions/ask/stream`;
       const body =
         mode === "rag"
           ? { question, top_k: topK }

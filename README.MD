@@ -85,6 +85,12 @@ npm install
 npm run dev
 ```
 
+4. Configure frontend environment variables:
+```bash
+# frontend/.env.local
+VITE_API_BASE_URL=http://localhost:8000/api/v1
+```
+
 The frontend will be available at `http://localhost:5173` (or another port if 5173 is in use).
 
 ## Configuration
@@ -246,6 +252,13 @@ The project uses Python and JavaScript conventions. Consider using:
 - Use React DevTools browser extension
 
 ## Deployment
+
+### Vercel Environment Variables
+
+For Vercel deployments, configure `VITE_API_BASE_URL` in:
+- **Project Settings → Environment Variables**
+
+Vercel manages environment variables per project and per environment (Development, Preview, Production).
 
 ### Docker
 
