@@ -320,3 +320,34 @@ def test_reclassifying_a_resolution_as_draft_is_not_a_status_event(harness) -> N
         )
         == 0
     )
+
+
+def test_reparse_rebuilds_passages_when_the_split_changes(harness) -> None:
+    url = doc_url(RES_174)
+    h = harness({url: fixture(RES_174)})
+    norm_id = h.run(h.pipeline._upsert_from_listing(_listing_item(url)))
+    h.run(h.pipeline.process_norm(norm_id))
+    count = h.scalar(select(func.count()).where(NormArticle.norm_id == norm_id))
+
+    async def split_differently():
+        async with SessionFactory() as db:
+            await db.execute(delete(NormArticle).where(NormArticle.norm_id == norm_id))
+            db.add(
+                NormArticle(
+                    norm_id=norm_id, position=0, label="Texto completo", norm_label="x", content="x"
+                )
+            )
+            await db.commit()
+
+    h.run(split_differently())
+    assert h.run(h.pipeline.process_norm(norm_id, reparse=True)) == "reparsed"
+    assert h.scalar(select(func.count()).where(NormArticle.norm_id == norm_id)) == count
+    assert (
+        h.scalar(
+            select(func.count()).where(
+                NormArticle.norm_id == norm_id, NormArticle.embedding.is_(None)
+            )
+        )
+        == 0
+    )
+    assert h.scalar(select(func.count()).where(NormVersion.norm_id == norm_id)) == 1

@@ -291,9 +291,11 @@ class CorpusPipeline:
             await self._fill_missing_embeddings(norm_id)
             return "unchanged"
 
+        # Parser fixes can re-split the same text, so a reparse compares the passages too.
+        passages_changed = text_changed or await self._passages_differ(norm_id, passages)
         vectors = (
             await self._embed([f"{parsed.label}. {label}\n{body}" for label, body in passages])
-            if text_changed
+            if passages_changed
             else None
         )
         raw_key = await self._storage.put(content, ".htm")
@@ -328,6 +330,7 @@ class CorpusPipeline:
                         raw_storage_key=raw_key,
                     )
                 )
+            if passages_changed:
                 await db.execute(delete(NormArticle).where(NormArticle.norm_id == norm_id))
                 db.add_all(
                     NormArticle(
@@ -475,6 +478,17 @@ class CorpusPipeline:
                 )
             norm.status = status
             await db.commit()
+
+    async def _passages_differ(self, norm_id: str, passages: list[tuple[str, str]]) -> bool:
+        async with self._sessions() as db:
+            stored = await db.execute(
+                select(NormArticle.label, NormArticle.content)
+                .where(NormArticle.norm_id == norm_id)
+                .order_by(NormArticle.position)
+            )
+            return [tuple(row) for row in stored.all()] != [
+                (label[:200], body) for label, body in passages
+            ]
 
     async def _fill_missing_embeddings(self, norm_id: str) -> None:
         async with self._sessions() as db:

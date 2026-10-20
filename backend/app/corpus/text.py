@@ -12,17 +12,16 @@ logger = logging.getLogger(__name__)
 
 PREAMBLE = "Encabezado y considerandos"
 WHOLE_TEXT = "Texto completo"
-ORDINALS = "PRIMERO|SEGUNDO|TERCERO|CUARTO|QUINTO|SEXTO|S[ÉE]PTIMO|OCTAVO|NOVENO|D[ÉE]CIMO"
+ORDINALS = "primero|segundo|tercero|cuarto|quinto|sexto|s[ée]ptimo|octavo|noveno|d[ée]cimo"
 ARTICLE_START = re.compile(
     r"^(?P<label>ART[ÍI]CULO\s+(?:\d+[A-Za-z]?(?:\s*(?:o|º|°)\b)?|[ÚU]NICO)"
     r"(?:\s+(?:BIS|TRANSITORIO))?)\.?\s*(?P<rest>.*)$"
 )
-# Extracted documents use mixed case and ordinal words; the punctuation after the label keeps
-# lines that merely start by citing an article from opening a new section.
+# Extracted documents use mixed case and ordinal words. Headings start with a capital and end
+# in punctuation; wrapped citations ("artículo 2.2.3.1. del Decreto 1073") do neither.
 DOCUMENT_ARTICLE_START = re.compile(
-    rf"^(?P<label>ART[ÍI]CULO\s+(?:\d+[A-Za-z]?(?:\s*(?:o|º|°))?|[ÚU]NICO|{ORDINALS})"
-    r"(?:\s+(?:BIS|TRANSITORIO))?)\s*[\.\-–:]\s*(?P<rest>.*)$",
-    re.IGNORECASE,
+    rf"^(?P<label>A(?i:rt[íi]culo)\s+(?:\d+[A-Za-z]?(?:\s*(?:o|º|°))?|(?i:[úu]nico|{ORDINALS}))"
+    r"(?:\s+(?i:bis|transitorio))?)\s*[\.\-–:](?!\d)\s*(?P<rest>.*)$"
 )
 ANNEX_START = re.compile(r"^(?P<label>ANEXO(?:\s+[\dIVXLC]+)?)\b\.?\s*(?P<rest>.*)$")
 

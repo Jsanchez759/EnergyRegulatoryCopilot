@@ -125,14 +125,14 @@ export default function NormPage() {
       <div className="norm-body">
         <nav className="article-index" aria-label="Índice de artículos">
           <h2>Contenido</h2>
-          <ol>{articles.map((article) => <li key={article.label}>
+          <ol>{articles.map((article, index) => <li key={`${article.label}-${index}`}>
             <a href={`#${encodeURIComponent(article.label)}`}>{article.label}</a>
             {amendmentsByArticle.has(article.label) && <span className="index-mark" title="Tiene modificaciones">•</span>}
           </li>)}</ol>
         </nav>
 
         <div className="article-text">
-          {articles.map((article) => <section key={article.label} id={encodeURIComponent(article.label)} className="norm-article">
+          {articles.map((article, index) => <section key={`${article.label}-${index}`} id={encodeURIComponent(article.label)} className="norm-article">
             <h2>{article.label}</h2>
             {amendmentsByArticle.has(article.label) && <ul className="article-amendments">
               {amendmentsByArticle.get(article.label).map((relation, index) => <li key={index}>

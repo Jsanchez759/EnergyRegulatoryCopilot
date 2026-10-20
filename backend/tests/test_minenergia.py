@@ -330,3 +330,20 @@ def test_api_exposes_comment_window_and_open_consultations(harness, make_user) -
 
     open_now = user.get("/api/v1/corpus/norms", params={"open_consultation": True}).json()
     assert [norm["key"] for norm in open_now["items"]] == [open_item.key]
+
+
+def test_cited_decree_articles_do_not_open_sections() -> None:
+    text = "\n".join(
+        [
+            "RESOLUCIÓN NÚMERO 1514",
+            "Que el",
+            "artículo 2.2.3.3.4.4. del Decreto 1073 de 2015, modificado por el artículo 7° del",
+            "Artículo 2.2.3.1.2. del Decreto 1073 de 2015 dispone que",
+            "Artículo 3 de la Ley 143 de 1994 establece",
+            "RESUELVE",
+            "ARTÍCULO PRIMERO: Ordenar el giro.",
+            "Artículo 2.- Autorizar al Grupo de Tesorería.",
+        ]
+    )
+    labels = [label for label, _ in document_passages(text, 2400)]
+    assert labels == ["Encabezado y considerandos", "Artículo primero", "Artículo 2"]
