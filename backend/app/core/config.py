@@ -53,6 +53,17 @@ class Settings(BaseSettings):
     EMBEDDING_MAX_RETRIES: int = Field(default=4, ge=0, le=10)
     MAX_UPLOAD_BYTES: int = Field(default=25 * 1024 * 1024, ge=1024)
 
+    CORPUS_STORAGE_DIR: Path = _BACKEND_ROOT / "storage" / "corpus"
+    CORPUS_START_YEAR: int = Field(default=2015, ge=1994)
+    CRAWLER_USER_AGENT: str = (
+        "EnerColBot/0.1 (+https://github.com/Jsanchez759/EnergyRegulatoryCopilot)"
+    )
+    CRAWLER_TIMEOUT_SECONDS: float = Field(default=60.0, gt=0, le=300)
+    CRAWLER_MAX_RETRIES: int = Field(default=3, ge=0, le=10)
+    CORPUS_CHUNK_CHARS: int = Field(default=2400, ge=500, le=8000)
+    OCR_LANGUAGE: str = "spa"
+    OCR_MIN_CHARS_PER_PAGE: int = Field(default=200, ge=0)
+
     RATE_LIMIT_ENABLED: bool = True
     RATE_LIMIT_STORAGE_URI: str = Field(default="memory://", repr=False)
     RATE_LIMIT_AUTH: str = "10/minute;50/hour"

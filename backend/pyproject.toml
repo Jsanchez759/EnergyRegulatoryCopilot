@@ -22,6 +22,11 @@ dependencies = [
     "pgvector>=0.4,<1.0",
     "sentry-sdk[fastapi]>=2.20,<3.0",
     "limits[async-redis]>=4.0,<6.0",
+    "pgqueuer>=1.6,<2.0",
+    "beautifulsoup4>=4.12,<5.0",
+    "lxml>=5.0,<7.0",
+    "pypdfium2>=4.30,<6.0",
+    "pytesseract>=0.3.13,<1.0",
 ]
 
 [dependency-groups]

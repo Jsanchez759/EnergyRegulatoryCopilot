@@ -1,5 +1,6 @@
 import asyncio
 import os
+import tempfile
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -12,6 +13,7 @@ TEST_DATABASE_URL = os.environ.get(
 os.environ.update(
     {
         "ENVIRONMENT": "test",
+        "CORPUS_STORAGE_DIR": tempfile.mkdtemp(prefix="enercol-corpus-"),
         "DATABASE_URL": TEST_DATABASE_URL,
         "OPENROUTER_API_KEY": "",
         "TAVILY_API_KEY": "",
