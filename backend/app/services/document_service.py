@@ -1,6 +1,8 @@
+import asyncio
 import hashlib
 import io
 import logging
+import time
 
 from asyncer import asyncify
 from openai import AsyncOpenAI, OpenAIError
@@ -152,20 +154,35 @@ class DocumentService:
 
     async def _embed_texts(self, texts: list[str]) -> list[list[float]]:
         client = self._require_client()
-        embeddings: list[list[float]] = []
-        try:
-            batch_size = settings.EMBEDDING_BATCH_SIZE
-            for start in range(0, len(texts), batch_size):
+        batch_size = settings.EMBEDDING_BATCH_SIZE
+        batches = [texts[start : start + batch_size] for start in range(0, len(texts), batch_size)]
+        # Provider stalls are per request, so concurrent batches keep one stall from blocking all.
+        semaphore = asyncio.Semaphore(settings.EMBEDDING_CONCURRENCY)
+
+        async def embed_batch(batch: list[str]) -> list[list[float]]:
+            async with semaphore:
                 response = await client.embeddings.create(
-                    model=settings.OPENROUTER_EMBEDDING_MODEL,
-                    input=texts[start : start + batch_size],
+                    model=settings.OPENROUTER_EMBEDDING_MODEL, input=batch
                 )
-                embeddings.extend(item.embedding for item in response.data)
+            return [item.embedding for item in response.data]
+
+        started = time.perf_counter()
+        try:
+            results = await asyncio.gather(*(embed_batch(batch) for batch in batches))
         except OpenAIError as exc:
             logger.warning("embedding provider request failed: %s", type(exc).__name__)
             raise ProviderUnavailableError(
                 "The embedding provider is not available right now."
             ) from exc
+        embeddings = [vector for batch in results for vector in batch]
+        logger.info(
+            "embedded texts",
+            extra={
+                "texts": len(texts),
+                "batches": len(batches),
+                "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+            },
+        )
         if any(len(vector) != settings.EMBEDDING_DIMENSIONS for vector in embeddings):
             logger.error(
                 "embedding model %s returned vectors that do not match EMBEDDING_DIMENSIONS=%s",

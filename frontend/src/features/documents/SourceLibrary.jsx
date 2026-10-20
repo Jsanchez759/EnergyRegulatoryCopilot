@@ -22,7 +22,7 @@ export default function SourceLibrary({ onClose }) {
       setStatus("Selecciona un PDF para indexarlo.");
       return;
     }
-    setStatus("Indexando documento…");
+    setStatus("Indexando documento… Los PDFs extensos pueden tardar unos minutos; no cierres esta pestaña.");
     try {
       const result = await uploadMutation.mutateAsync(selectedFile);
       setSelectedFile(null);
