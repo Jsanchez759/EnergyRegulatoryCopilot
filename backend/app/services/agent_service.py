@@ -259,10 +259,38 @@ class AgentService:
                         yield {"delta": delta}
                         final_deltas.append(delta)
             answer = result.response.content or streamed_response or "".join(final_deltas)
-            if not answer.strip():
+            # Some routed models skip tool calls entirely; regulatory answers must stay grounded.
+            if not steps:
                 logger.warning(
-                    "agent returned no final text; requesting one bounded synthesis retry"
+                    "agent used no research tools; running grounded retrieval",
+                    extra={"had_answer": bool(answer.strip())},
                 )
+                for tool_name, search in (
+                    ("search_uploaded_documents", search_uploaded_documents),
+                    ("search_web", search_web),
+                ):
+                    yield {
+                        "activity": {
+                            "status": "running",
+                            "tool": tool_name,
+                            "query": question,
+                            "summary": "Searching the selected source.",
+                        }
+                    }
+                    await search(question)
+                    step = steps[-1]
+                    yield {
+                        "activity": {
+                            "status": "complete",
+                            "tool": step.tool,
+                            "query": step.query,
+                            "summary": step.summary,
+                            "source_ids": step.source_ids,
+                        }
+                    }
+                answer = ""
+            if not answer.strip():
+                logger.warning("synthesizing the final answer from gathered evidence")
                 evidence = (
                     "\n\n".join(
                         f"[{source.id}] {source.title}\n{source.url or ''}\n{source.snippet}"
