@@ -22,7 +22,7 @@ def fresh_rate_limits():
 def test_readiness_reports_migrated_schema(client: TestClient) -> None:
     response = client.get("/api/v1/health/ready")
     assert response.status_code == 200
-    assert response.json()["schema"] == "0002_documents_pgvector"
+    assert response.json()["schema"] == "0003_pplx_embeddings_1024"
 
 
 def test_responses_carry_generated_or_forwarded_request_id(client: TestClient) -> None:

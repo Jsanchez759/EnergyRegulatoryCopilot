@@ -44,7 +44,7 @@ imágenes Docker en cada PR.
 
 - Cuentas, sesiones, conversaciones, documentos y fragmentos con embeddings viven en Postgres.
   Borrar una cuenta o un documento elimina en cascada sus fragmentos.
-- Los embeddings se guardan como `halfvec(2048)` con un índice HNSW de distancia coseno. La búsqueda
+- Los embeddings se guardan como `halfvec(1024)` con un índice HNSW de distancia coseno. La búsqueda
   filtra por usuario con `hnsw.iterative_scan` para no perder resultados en bibliotecas pequeñas.
 - Cambiar a un modelo de embeddings con otra dimensión requiere una migración nueva y reindexar.
 - Cada PDF guarda su SHA-256; subir el mismo archivo dos veces devuelve 409.
@@ -87,9 +87,9 @@ Las opciones se definen en `backend/app/core/config.py` y se sobrescriben desde 
 | `DATABASE_URL` | `postgresql+asyncpg://enercol:enercol@localhost:5432/enercol` | Conexión a Postgres |
 | `DATABASE_POOL_SIZE` / `DATABASE_MAX_OVERFLOW` | `5` / `10` | Pool de conexiones por proceso |
 | `OPENROUTER_API_KEY` | — | Credencial privada del proveedor |
-| `OPENROUTER_CHAT_MODEL` | `openrouter/free` | Modelo de conversación (debe admitir herramientas) |
-| `OPENROUTER_EMBEDDING_MODEL` | `nvidia/llama-nemotron-embed-vl-1b-v2:free` | Modelo de embeddings |
-| `EMBEDDING_DIMENSIONS` | `2048` | Debe coincidir con la columna creada por las migraciones |
+| `OPENROUTER_CHAT_MODEL` | `amazon/nova-micro-v1` | Modelo de conversación (debe admitir herramientas) |
+| `OPENROUTER_EMBEDDING_MODEL` | `perplexity/pplx-embed-v1-0.6b` | Modelo de embeddings (multilingüe) |
+| `EMBEDDING_DIMENSIONS` | `1024` | Debe coincidir con la columna creada por las migraciones |
 | `TAVILY_API_KEY` | — | Búsqueda web; sin ella el agente indica que no pudo verificar |
 | `ALLOWED_ORIGINS` | `localhost:5173` | Orígenes CORS explícitos |
 | `ALLOWED_ORIGIN_REGEX` | localhost en dev/test | Orígenes por patrón |
@@ -134,8 +134,9 @@ Las respuestas 429 incluyen `Retry-After`.
 
 - La ingesta de PDFs es síncrona dentro del request; un worker en segundo plano llegará con la feature
   de scraping e ingesta del corpus regulatorio.
-- Los modelos gratuitos de OpenRouter son inestables (timeouts frecuentes en embeddings y respuestas
-  vacías o cortadas en chat). Para usuarios reales conviene un modelo de pago.
+- Los modelos por defecto son los más baratos que respondieron con fuentes y citas en todas las
+  preguntas de prueba (unos 0,0003 USD por consulta). Los modelos gratuitos de OpenRouter no sirven:
+  bloquean llamadas al azar y limitan a 20 solicitudes por minuto.
 - No hay verificación de correo ni recuperación de contraseña todavía.
 
 ## Estructura

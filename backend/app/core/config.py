@@ -23,8 +23,8 @@ class Settings(BaseSettings):
 
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
     OPENROUTER_API_KEY: str = Field(default="", repr=False)
-    OPENROUTER_CHAT_MODEL: str = "openrouter/free"
-    OPENROUTER_EMBEDDING_MODEL: str = "nvidia/llama-nemotron-embed-vl-1b-v2:free"
+    OPENROUTER_CHAT_MODEL: str = "amazon/nova-micro-v1"
+    OPENROUTER_EMBEDDING_MODEL: str = "perplexity/pplx-embed-v1-0.6b"
     TAVILY_API_KEY: str = Field(default="", repr=False)
 
     AGENT_MAX_ITERATIONS: int = Field(default=4, ge=1, le=8)
@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     SESSION_COOKIE_SAMESITE: Literal["lax", "strict", "none"] = "lax"
 
     # Must match the vector column width created by the migrations.
-    EMBEDDING_DIMENSIONS: int = 2048
+    EMBEDDING_DIMENSIONS: int = 1024
     RAG_CHUNK_SIZE: int = Field(default=900, ge=200, le=4000)
     RAG_CHUNK_OVERLAP: int = Field(default=160, ge=0, le=1000)
     EMBEDDING_BATCH_SIZE: int = Field(default=32, ge=1, le=256)
