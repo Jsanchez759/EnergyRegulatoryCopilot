@@ -117,7 +117,7 @@ def split_sections(lines: list[str], extracted: bool = False) -> list[tuple[str,
 
 def article_label(raw: str) -> str:
     label = re.sub(r"\s+", " ", raw).strip()
-    label = re.sub(r"(\d+)\s*(?:o|º|°)\b", r"\1", label)
+    label = re.sub(r"(\d+)\s*(?:º|°|o\b)", r"\1", label)
     return re.sub(r"^Articulo", "Artículo", label.capitalize()).replace("Unico", "Único")
 
 

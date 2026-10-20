@@ -343,7 +343,28 @@ def test_cited_decree_articles_do_not_open_sections() -> None:
             "RESUELVE",
             "ARTÍCULO PRIMERO: Ordenar el giro.",
             "Artículo 2.- Autorizar al Grupo de Tesorería.",
+            "Artículo 3°. Vigencia.",
         ]
     )
     labels = [label for label, _ in document_passages(text, 2400)]
-    assert labels == ["Encabezado y considerandos", "Artículo primero", "Artículo 2"]
+    assert labels == [
+        "Encabezado y considerandos",
+        "Artículo primero",
+        "Artículo 2",
+        "Artículo 3",
+    ]
+
+
+def test_draft_named_for_comments_is_still_the_draft() -> None:
+    files = [
+        me.ParsedFile("https://x/documents/1/form.xlsx", "diligenciando el formulario", "xlsx"),
+        me.ParsedFile(
+            "https://x/documents/2/Proyecto_resolucion_para_comentarios.pdf",
+            "Proyecto de Resolución",
+            "pdf",
+        ),
+        me.ParsedFile(
+            "https://x/documents/3/Memoria_para_comentarios.pdf", "Memoria justificativa", "pdf"
+        ),
+    ]
+    assert me._draft_document(files).label == "Proyecto de Resolución"

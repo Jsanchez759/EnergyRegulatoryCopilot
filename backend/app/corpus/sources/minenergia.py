@@ -340,7 +340,8 @@ def _draft_document(files: list[ParsedFile]) -> ParsedFile | None:
         item
         for item in files
         if item.kind in {"pdf", "docx"}
-        and not SUPPORTING_DOCUMENT.search(f"{item.label} {item.url}")
+        # Drafts are often named "..._para_comentarios.pdf", so only the link text counts.
+        and not SUPPORTING_DOCUMENT.search(item.label)
     ]
     named = [item for item in candidates if DRAFT_DOCUMENT.search(item.label)]
     return (named or candidates or [None])[0]
