@@ -4,7 +4,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import settings
@@ -60,6 +60,12 @@ class CorpusPipeline:
         mode="backfill" reads every listing and queues norms that were never processed.
         """
         async with self._sessions() as db:
+            # Discovery runs one at a time per source, so any run still open was interrupted.
+            await db.execute(
+                update(CrawlRun)
+                .where(CrawlRun.source == creg.SOURCE, CrawlRun.status == "running")
+                .values(status="abandoned", finished_at=utc_now())
+            )
             run = CrawlRun(source=creg.SOURCE, mode=mode)
             db.add(run)
             await db.commit()
@@ -78,21 +84,20 @@ class CorpusPipeline:
                     run.error_sample = str(exc)[:1000]
                     logger.warning("listing fetch failed", extra={"url": url})
                     continue
-                if items is None:
-                    continue
-                run.items_seen += len(items)
-                for item in items:
-                    norm_id = await self._upsert_from_listing(item)
-                    if norm_id and norm_id not in queued:
-                        queued.add(norm_id)
-                        await self._enqueue(PROCESS_ENTRYPOINT, {"norm_id": norm_id}, norm_id)
+                if items is not None:
+                    run.items_seen += len(items)
+                    for item in items:
+                        norm_id = await self._upsert_from_listing(item)
+                        if norm_id and norm_id not in queued:
+                            queued.add(norm_id)
+                            await self._enqueue(PROCESS_ENTRYPOINT, {"norm_id": norm_id}, norm_id)
+                run.items_queued = len(queued)
+                await self._save_run(run)
 
         run.items_queued = len(queued)
         run.status = "failed" if run.errors and not run.items_seen else "succeeded"
         run.finished_at = utc_now()
-        async with self._sessions() as db:
-            await db.merge(run)
-            await db.commit()
+        await self._save_run(run)
         logger.info(
             "crawl finished",
             extra={
@@ -106,6 +111,11 @@ class CorpusPipeline:
             },
         )
         return run
+
+    async def _save_run(self, run: CrawlRun) -> None:
+        async with self._sessions() as db:
+            await db.merge(run)
+            await db.commit()
 
     async def queue_recheck(self, source: str) -> int:
         async with self._sessions() as db:

@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import asyncpg
-from pgqueuer import AsyncpgDriver, PgQueuer
+from pgqueuer import AsyncpgDriver, AsyncpgPoolDriver, PgQueuer
 from pgqueuer.errors import DuplicateJobError
 from pgqueuer.models import Job, Schedule
 from pgqueuer.queries import Queries
@@ -94,19 +94,22 @@ async def main() -> None:
     setup_logging()
     init_sentry()
     connection = await asyncpg.connect(asyncpg_dsn())
-    driver = AsyncpgDriver(connection)
-    pgq = PgQueuer(driver)
+    pgq = PgQueuer(AsyncpgDriver(connection))
+    # Jobs enqueue follow-up work; sharing PgQueuer's own connection deadlocks against its
+    # dequeue and heartbeat traffic, so they get a separate pool.
+    enqueue_pool = await asyncpg.create_pool(asyncpg_dsn(), min_size=1, max_size=4)
     loop = asyncio.get_running_loop()
     for signum in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(signum, pgq.shutdown.set)
-    async with corpus_pipeline(Queries(driver)) as pipeline:
-        register(pgq, pipeline)
-        logger.info("corpus worker started")
-        try:
+    try:
+        async with corpus_pipeline(Queries(AsyncpgPoolDriver(enqueue_pool))) as pipeline:
+            register(pgq, pipeline)
+            logger.info("corpus worker started")
             await pgq.run()
-        finally:
-            await connection.close()
-            await engine.dispose()
+    finally:
+        await enqueue_pool.close()
+        await connection.close()
+        await engine.dispose()
 
 
 if __name__ == "__main__":

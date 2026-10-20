@@ -186,3 +186,17 @@ def _listing_item(url, derogated=False):
         derogated=derogated,
         draft_listing=False,
     )
+
+
+def test_new_discovery_closes_interrupted_runs(harness) -> None:
+    h = harness({listing_url(GENERAL_2015): fixture(GENERAL_2015)})
+
+    async def interrupted():
+        async with SessionFactory() as db:
+            db.add(CrawlRun(source="creg", mode="backfill"))
+            await db.commit()
+
+    h.run(interrupted())
+    h.run(h.pipeline.discover_creg(years=[2015], mode="backfill"))
+    statuses = h.scalar(select(func.array_agg(CrawlRun.status)).where(CrawlRun.source == "creg"))
+    assert sorted(statuses) == ["abandoned", "succeeded"]
