@@ -202,17 +202,26 @@ class AgentService:
             }
         }
         pending_deltas: list[str] = []
+        final_deltas: list[str] = []
+        streamed_response = ""
         try:
             async for event in handler.stream_events():
                 if isinstance(event, AgentStream):
                     pending_deltas.append(event.delta)
+                    if event.response:
+                        streamed_response = event.response
                 elif isinstance(event, AgentOutput):
                     if event.tool_calls:
                         pending_deltas.clear()
+                        final_deltas.clear()
+                        streamed_response = ""
                     else:
+                        if event.response.content:
+                            streamed_response = event.response.content
                         for delta in pending_deltas:
                             if delta:
                                 yield {"delta": delta}
+                                final_deltas.append(delta)
                         pending_deltas.clear()
                 elif isinstance(event, ToolCall):
                     yield {
@@ -243,9 +252,38 @@ class AgentService:
                 for delta in pending_deltas:
                     if delta:
                         yield {"delta": delta}
-            answer = result.response.content or ""
-            if not answer:
+                        final_deltas.append(delta)
+            answer = result.response.content or streamed_response or "".join(final_deltas)
+            if not answer.strip():
+                logger.warning(
+                    "agent returned no final text; requesting one bounded synthesis retry"
+                )
+                evidence = (
+                    "\n\n".join(
+                        f"[{source.id}] {source.title}\n{source.url or ''}\n{source.snippet}"
+                        for source in sources.values()
+                    )
+                    or "No verifiable sources were retrieved."
+                )
+                fallback = await llm.achat(
+                    [
+                        LlamaChatMessage(role="system", content=SYSTEM_PROMPT),
+                        LlamaChatMessage(
+                            role="user",
+                            content=(
+                                f"Answer this question concisely: {question}\n\n"
+                                f"Evidence gathered by the research tools:\n{evidence}\n\n"
+                                "If this evidence does not support a specific regulatory answer, "
+                                "say that it could not be verified. Cite only source IDs included "
+                                "above. Do not invent specific rules or citations."
+                            ),
+                        ),
+                    ]
+                )
+                answer = fallback.message.content or ""
+            if not answer.strip():
                 raise ProviderUnavailableError("The model returned an empty answer.")
+            yield {"answer": answer}
             audit = AgentAudit(
                 method=self._audit_method(steps),
                 steps=steps,

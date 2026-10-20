@@ -53,12 +53,15 @@ async def research_stream(
     await db.commit()
 
     answer_parts: list[str] = []
+    final_answer: str | None = None
     audit = None
     failure = None
     try:
         async for event in agent_service.stream_answer(payload.question, history, current.user.id):
             if event.get("delta"):
                 answer_parts.append(str(event["delta"]))
+            if event.get("answer"):
+                final_answer = str(event["answer"])
             if event.get("audit"):
                 audit = event["audit"]
             yield ServerSentEvent(data=event)
@@ -67,7 +70,7 @@ async def research_stream(
         yield ServerSentEvent(data={"error": failure})
         yield ServerSentEvent(data={"done": True})
     finally:
-        content = "".join(answer_parts)
+        content = final_answer or "".join(answer_parts)
         if failure:
             content = f"No se pudo completar la consulta. {failure}"
         if content:

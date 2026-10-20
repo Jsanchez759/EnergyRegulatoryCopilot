@@ -196,6 +196,7 @@ function AuthenticatedWorkspace({ user }) {
     setIsSending(true);
     setAppError("");
     setStreamStatus("Conectando");
+    let receivedText = false;
 
     try {
       const response = await fetch(`${API_BASE_URL}/agent/stream`, {
@@ -220,13 +221,22 @@ function AuthenticatedWorkspace({ user }) {
           }));
         }
         if (eventData.delta) {
+          receivedText = true;
           queryClient.setQueryData(queryKey, (current) => ({
             ...current,
             messages: (current?.messages || []).map((message) => message.id === assistantId ? { ...message, content: message.content + eventData.delta } : message),
           }));
         }
+        if (eventData.answer) {
+          receivedText = true;
+          queryClient.setQueryData(queryKey, (current) => ({
+            ...current,
+            messages: (current?.messages || []).map((message) => message.id === assistantId ? { ...message, content: eventData.answer } : message),
+          }));
+        }
         if (eventData.done) setStreamStatus("Completado");
       });
+      if (!receivedText) throw new Error("El agente finalizó sin producir una respuesta. Inténtalo de nuevo.");
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: conversationsQueryKey }),
         queryClient.invalidateQueries({ queryKey }),
