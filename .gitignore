@@ -239,3 +239,7 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 backend/storage/
+
+# Playwright
+test-results/
+playwright-report/

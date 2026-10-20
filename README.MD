@@ -1,6 +1,6 @@
 # EnerCol
 
-Espacio de investigación para consultar regulación energética colombiana y buscar dentro de documentos PDF propios. La interfaz guarda las conversaciones en el navegador; el índice documental se guarda en `backend/storage/chroma`.
+Espacio de investigación para consultar regulación energética colombiana y buscar dentro de documentos PDF propios. Cuentas y conversaciones se guardan en SQLite; el índice documental, en `backend/storage/chroma`.
 
 ## Requisitos
 
@@ -21,6 +21,19 @@ make setup   # instala dependencias Python y Node
 make dev     # levanta backend + frontend; Ctrl-C detiene ambos
 make help    # lista comandos disponibles
 ```
+
+## Pruebas y Docker
+
+```bash
+make test    # pytest (backend) + Vitest (frontend)
+make check   # lockfile, lint, formato, pruebas y build de producción
+make up      # construye y levanta web (http://localhost:8080) y API (:8000) con Docker
+make e2e     # Playwright contra el stack levantado; usa el modelo y embeddings reales
+make down
+```
+
+La primera vez, instala el navegador de Playwright con `npx --prefix frontend playwright install chromium`.
+CI (`.github/workflows/ci.yml`) ejecuta lint, pruebas, build y las imágenes Docker en cada PR.
 
 También están disponibles `make backend`, `make frontend`, `make health`, `make lint`,
 `make format`, `make build` y `make check`. Los puertos se pueden cambiar, por ejemplo:
@@ -102,6 +115,10 @@ Las opciones se definen en `backend/app/core/config.py` y pueden sobrescribirse 
 | `VECTOR_COLLECTION_NAME` | `regulatory_documents` | Colección vectorial |
 | `RAG_CHUNK_SIZE` | `900` | Tamaño de fragmentos en caracteres |
 | `RAG_CHUNK_OVERLAP` | `160` | Solapamiento entre fragmentos |
+| `EMBEDDING_BATCH_SIZE` | `32` | Fragmentos por llamada de embeddings |
+| `EMBEDDING_TIMEOUT_SECONDS` | `15` | Timeout por llamada de embeddings |
+| `EMBEDDING_MAX_RETRIES` | `4` | Reintentos ante timeouts del proveedor |
+| `AGENT_MAX_OUTPUT_TOKENS` | `4096` | Límite de tokens de la respuesta |
 | `MAX_UPLOAD_BYTES` | `26214400` | Máximo de carga (25 MiB) |
 | `ALLOWED_ORIGINS` | `http://localhost:5173`, `http://127.0.0.1:5173` | Orígenes CORS explícitos |
 | `LOG_LEVEL` | `INFO` | Nivel de logs |
@@ -131,8 +148,12 @@ backend/
     core/             Configuración y logging
     schemas/           Request, source, answer and audit models
     services/          Agent orchestration, document indexing and retrieval
-  pyproject.toml      Dependencias, configuración de uv y Ruff
+  tests/              Pruebas pytest
+  Dockerfile      Dependencias, configuración de uv y Ruff
   uv.lock             Resolución reproducible
 frontend/
   src/                Aplicación React y estilos
+  e2e/                Pruebas Playwright
+  Dockerfile          Build de Vite servido con nginx
+docker-compose.yml    Stack local completo
 ```
