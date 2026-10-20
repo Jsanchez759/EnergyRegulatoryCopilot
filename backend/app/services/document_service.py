@@ -1,22 +1,15 @@
 import hashlib
 import io
 import logging
-import uuid
-from datetime import UTC, datetime
-from pathlib import Path
 
-import chromadb
 from asyncer import asyncify
-from chromadb.config import Settings as ChromaSettings
-from llama_index.core import VectorStoreIndex
-from llama_index.core.schema import NodeWithScore, QueryBundle
-from llama_index.core.vector_stores import ExactMatchFilter, MetadataFilters
-from llama_index.embeddings.openai import OpenAIEmbedding
-from llama_index.vector_stores.chroma import ChromaVectorStore
 from openai import AsyncOpenAI, OpenAIError
 from pypdf import PdfReader
+from sqlalchemy import delete, exists, select, text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import settings
+from app.models import Document, DocumentChunk
 from app.schemas.agent import EvidenceSource, IndexedDocument
 from app.services.errors import ProviderUnavailableError
 
@@ -27,32 +20,37 @@ class DocumentProcessingError(ValueError):
     """Raised when an uploaded PDF cannot be safely indexed."""
 
 
+class DuplicateDocumentError(ValueError):
+    """Raised when the user already indexed a file with the same content."""
+
+
+def indexed_document(document: Document) -> IndexedDocument:
+    return IndexedDocument(
+        document_id=document.id,
+        filename=document.filename,
+        chunks_indexed=document.chunk_count,
+        page_count=document.page_count,
+        file_sha256=document.file_sha256,
+        created_at=document.created_at.isoformat(),
+    )
+
+
 class DocumentService:
-    """Manage PDF ingestion and LlamaIndex retrieval over the Chroma collection."""
+    """Manage PDF ingestion and similarity search over pgvector."""
 
-    def __init__(self) -> None:
-        path = Path(settings.VECTOR_DB_PATH)
-        path.mkdir(parents=True, exist_ok=True)
-        self._client = chromadb.PersistentClient(
-            path=str(path),
-            settings=ChromaSettings(anonymized_telemetry=False),
-        )
-        self._collection = self._client.get_or_create_collection(
-            name=settings.VECTOR_COLLECTION_NAME
-        )
-        self._llm_client = self._create_openai_client()
-        self._index = self._create_index(self._collection) if self._llm_client is not None else None
-
-    @staticmethod
-    def _create_openai_client() -> AsyncOpenAI | None:
-        if not settings.OPENROUTER_API_KEY:
-            return None
-        return AsyncOpenAI(
-            base_url=settings.OPENROUTER_BASE_URL,
-            api_key=settings.OPENROUTER_API_KEY,
-            # Free-tier providers stall a share of requests; a short timeout plus retries recovers.
-            timeout=settings.EMBEDDING_TIMEOUT_SECONDS,
-            max_retries=settings.EMBEDDING_MAX_RETRIES,
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._sessions = session_factory
+        self._llm_client = (
+            AsyncOpenAI(
+                base_url=settings.OPENROUTER_BASE_URL,
+                api_key=settings.OPENROUTER_API_KEY,
+                # Free-tier providers stall a share of requests; a short timeout plus retries
+                # recovers.
+                timeout=settings.EMBEDDING_TIMEOUT_SECONDS,
+                max_retries=settings.EMBEDDING_MAX_RETRIES,
+            )
+            if settings.OPENROUTER_API_KEY
+            else None
         )
 
     def _require_client(self) -> AsyncOpenAI:
@@ -60,94 +58,102 @@ class DocumentService:
             raise ProviderUnavailableError("OPENROUTER_API_KEY is not configured on the server.")
         return self._llm_client
 
-    async def ingest_pdf(self, file_bytes: bytes, filename: str, user_id: str) -> tuple[str, int]:
+    async def ingest_pdf(self, file_bytes: bytes, filename: str, user_id: str) -> IndexedDocument:
         self._require_client()
-        pages = await asyncify(self._extract_pages)(file_bytes)
+        file_hash = hashlib.sha256(file_bytes).hexdigest()
+        async with self._sessions() as db:
+            duplicate = await db.scalar(
+                select(Document.filename).where(
+                    Document.user_id == user_id, Document.file_sha256 == file_hash
+                )
+            )
+        if duplicate:
+            raise DuplicateDocumentError(f"Este PDF ya está en tu biblioteca como «{duplicate}».")
+
+        pages, page_count = await asyncify(self._extract_pages)(file_bytes)
         chunks = self._chunk_pages(pages)
         if not chunks:
             raise DocumentProcessingError("The PDF contains no selectable text to index.")
-
         embeddings = await self._embed_texts([str(chunk["text"]) for chunk in chunks])
-        document_id = str(uuid.uuid4())
-        file_hash = hashlib.sha256(file_bytes).hexdigest()
-        created_at = datetime.now(UTC).isoformat()
-        await asyncify(self._collection.add)(
-            ids=[f"{document_id}:{index}" for index in range(len(chunks))],
-            embeddings=embeddings,
-            documents=[str(chunk["text"]) for chunk in chunks],
-            metadatas=[
-                {
-                    "document_id": document_id,
-                    "user_id": user_id,
-                    "filename": filename,
-                    "page": int(chunk["page"]),
-                    "file_sha256": file_hash,
-                    "indexed_at": created_at,
-                    "embedding_model": settings.OPENROUTER_EMBEDDING_MODEL,
-                    "embedding_dimensions": len(embeddings[0]),
-                }
-                for chunk in chunks
-            ],
+
+        document = Document(
+            user_id=user_id,
+            filename=filename[:255],
+            file_sha256=file_hash,
+            size_bytes=len(file_bytes),
+            page_count=page_count,
+            chunk_count=len(chunks),
+            embedding_model=settings.OPENROUTER_EMBEDDING_MODEL,
         )
-        return document_id, len(chunks)
+        document.chunks = [
+            DocumentChunk(
+                user_id=user_id,
+                chunk_index=index,
+                page=int(chunk["page"]),
+                content=str(chunk["text"]),
+                embedding=embedding,
+            )
+            for index, (chunk, embedding) in enumerate(zip(chunks, embeddings, strict=True))
+        ]
+        async with self._sessions() as db:
+            db.add(document)
+            await db.commit()
+        return indexed_document(document)
+
+    async def has_documents(self, user_id: str) -> bool:
+        async with self._sessions() as db:
+            return bool(await db.scalar(select(exists().where(Document.user_id == user_id))))
 
     async def search(self, query: str, user_id: str, top_k: int = 6) -> list[EvidenceSource]:
         if not await self.has_documents(user_id):
             return []
-        if self._index is None:
-            raise ProviderUnavailableError("OPENROUTER_API_KEY is not configured on the server.")
         query_embedding = (await self._embed_texts([query]))[0]
-        filters = MetadataFilters(filters=[ExactMatchFilter(key="user_id", value=user_id)])
-        retriever = self._index.as_retriever(similarity_top_k=top_k, filters=filters)
-        query_bundle = QueryBundle(query_str=query, embedding=query_embedding)
-        results: list[NodeWithScore] = await asyncify(retriever.retrieve)(query_bundle)
+        distance = DocumentChunk.embedding.cosine_distance(query_embedding)
+        async with self._sessions() as db:
+            # Without iterative scans, HNSW filters by owner after picking candidates and can
+            # return too few rows for users with small libraries.
+            await db.execute(text("SET LOCAL hnsw.iterative_scan = strict_order"))
+            rows = await db.execute(
+                select(DocumentChunk, Document, distance.label("distance"))
+                .join(Document, Document.id == DocumentChunk.document_id)
+                .where(DocumentChunk.user_id == user_id)
+                .order_by(distance)
+                .limit(top_k)
+            )
+            results = rows.all()
         return [
             EvidenceSource(
                 id=f"D{index}",
                 kind="document",
-                title=str(node.node.metadata.get("filename", "Uploaded document")),
-                page=node.node.metadata.get("page"),
-                snippet=node.node.get_content(),
-                score=node.score,
-                file_sha256=node.node.metadata.get("file_sha256"),
-                indexed_at=node.node.metadata.get("indexed_at"),
+                title=document.filename,
+                page=chunk.page,
+                snippet=chunk.content,
+                score=round(1 - float(chunk_distance), 4),
+                file_sha256=document.file_sha256,
+                indexed_at=document.created_at.isoformat(),
             )
-            for index, node in enumerate(results, start=1)
+            for index, (chunk, document, chunk_distance) in enumerate(results, start=1)
         ]
 
-    async def has_documents(self, user_id: str) -> bool:
-        result = await asyncify(self._collection.get)(
-            where={"user_id": user_id}, limit=1, include=[]
-        )
-        return bool(result.get("ids"))
-
     async def list_documents(self, user_id: str) -> list[IndexedDocument]:
-        result = await asyncify(self._collection.get)(
-            where={"user_id": user_id}, include=["metadatas"]
-        )
-        documents: dict[str, IndexedDocument] = {}
-        for metadata in result.get("metadatas", []) or []:
-            if not metadata:
-                continue
-            document_id = str(metadata.get("document_id", "unknown"))
-            item = documents.setdefault(
-                document_id,
-                IndexedDocument(
-                    document_id=document_id,
-                    filename=str(metadata.get("filename", "document.pdf")),
-                    chunks_indexed=0,
-                ),
+        async with self._sessions() as db:
+            documents = await db.scalars(
+                select(Document).where(Document.user_id == user_id).order_by(Document.filename)
             )
-            item.chunks_indexed += 1
-        return sorted(documents.values(), key=lambda document: document.filename.casefold())
+            return [indexed_document(document) for document in documents]
 
-    async def delete_user_documents(self, user_id: str) -> None:
-        await asyncify(self._collection.delete)(where={"user_id": user_id})
+    async def delete_document(self, user_id: str, document_id: str) -> bool:
+        async with self._sessions() as db:
+            result = await db.execute(
+                delete(Document).where(Document.id == document_id, Document.user_id == user_id)
+            )
+            await db.commit()
+        return result.rowcount > 0
 
     async def _embed_texts(self, texts: list[str]) -> list[list[float]]:
+        client = self._require_client()
+        embeddings: list[list[float]] = []
         try:
-            client = self._require_client()
-            embeddings = []
             batch_size = settings.EMBEDDING_BATCH_SIZE
             for start in range(0, len(texts), batch_size):
                 response = await client.embeddings.create(
@@ -160,40 +166,37 @@ class DocumentService:
             raise ProviderUnavailableError(
                 "The embedding provider is not available right now."
             ) from exc
+        if any(len(vector) != settings.EMBEDDING_DIMENSIONS for vector in embeddings):
+            logger.error(
+                "embedding model %s returned vectors that do not match EMBEDDING_DIMENSIONS=%s",
+                settings.OPENROUTER_EMBEDDING_MODEL,
+                settings.EMBEDDING_DIMENSIONS,
+            )
+            raise ProviderUnavailableError("The embedding model is misconfigured on the server.")
         return embeddings
-
-    def _create_index(self, collection: chromadb.Collection) -> VectorStoreIndex:
-        embedding_model = OpenAIEmbedding(
-            model_name=settings.OPENROUTER_EMBEDDING_MODEL,
-            api_key=settings.OPENROUTER_API_KEY,
-            api_base=settings.OPENROUTER_BASE_URL,
-            timeout=90.0,
-            max_retries=2,
-        )
-        vector_store = ChromaVectorStore(chroma_collection=collection)
-        return VectorStoreIndex.from_vector_store(vector_store, embed_model=embedding_model)
 
     async def close(self) -> None:
         if self._llm_client is not None:
             await self._llm_client.close()
 
     @staticmethod
-    def _extract_pages(file_bytes: bytes) -> list[dict[str, int | str]]:
+    def _extract_pages(file_bytes: bytes) -> tuple[list[dict[str, int | str]], int]:
         if not file_bytes.startswith(b"%PDF-"):
             raise DocumentProcessingError("The file does not have a valid PDF header.")
         try:
             reader = PdfReader(io.BytesIO(file_bytes), strict=False)
             if reader.is_encrypted:
                 raise DocumentProcessingError("The PDF is password protected.")
+            # Postgres text columns reject NUL bytes, which some PDF extractors emit.
             pages = [
-                {"page": index + 1, "text": (page.extract_text() or "").strip()}
+                {"page": index + 1, "text": (page.extract_text() or "").replace("\x00", "").strip()}
                 for index, page in enumerate(reader.pages)
             ]
         except DocumentProcessingError:
             raise
         except Exception as exc:
             raise DocumentProcessingError("The PDF could not be read.") from exc
-        return [page for page in pages if page["text"]]
+        return [page for page in pages if page["text"]], len(pages)
 
     @staticmethod
     def _chunk_pages(pages: list[dict[str, int | str]]) -> list[dict[str, int | str]]:
@@ -201,9 +204,9 @@ class DocumentService:
         size = settings.RAG_CHUNK_SIZE
         step = size - settings.RAG_CHUNK_OVERLAP
         for page in pages:
-            text = str(page["text"])
-            for start in range(0, len(text), step):
-                chunk = text[start : start + size].strip()
+            text_value = str(page["text"])
+            for start in range(0, len(text_value), step):
+                chunk = text_value[start : start + size].strip()
                 if chunk:
                     chunks.append({"page": int(page["page"]), "text": chunk})
         return chunks

@@ -7,7 +7,7 @@ WEB_HOST ?= 127.0.0.1
 WEB_PORT ?= 5173
 API_BASE_URL ?= http://$(API_HOST):$(API_PORT)/api/v1
 
-.PHONY: help doctor setup sync lock dev backend serve frontend preview lint format format-check test e2e up down build check health
+.PHONY: help doctor setup sync lock db migrate dev backend serve frontend preview lint format format-check test e2e up down build check health
 
 help: ## Show available commands
 	@printf '\nEnerCol development commands\n\n'
@@ -18,6 +18,7 @@ doctor: ## Check local tools and required environment files
 	@command -v $(UV) >/dev/null || { echo "Missing uv: https://docs.astral.sh/uv/"; exit 1; }
 	@command -v $(NPM) >/dev/null || { echo "Missing npm (install Node.js 18+)."; exit 1; }
 	@command -v $(PYTHON) >/dev/null || { echo "Missing $(PYTHON)."; exit 1; }
+	@command -v docker >/dev/null || { echo "Missing Docker (needed for Postgres)."; exit 1; }
 	@test -f backend/.env || { echo "Missing backend/.env with OPENROUTER_API_KEY."; exit 1; }
 	@echo "Tools and backend/.env are ready."
 
@@ -31,10 +32,16 @@ sync: ## Sync Python dependencies from uv.lock
 lock: ## Resolve and update uv.lock
 	$(UV) lock --directory backend
 
-dev: ## Start backend and frontend together; Ctrl-C stops both
+db: ## Start local Postgres with pgvector (docker compose service `db`)
+	docker compose up -d --wait db
+
+migrate: db ## Apply database migrations (a deploy step, never run by the app itself)
+	$(UV) run --directory backend alembic upgrade head
+
+dev: migrate ## Start backend and frontend together; Ctrl-C stops both
 	UV="$(UV)" NPM="$(NPM)" API_HOST="$(API_HOST)" API_PORT="$(API_PORT)" WEB_HOST="$(WEB_HOST)" WEB_PORT="$(WEB_PORT)" API_BASE_URL="$(API_BASE_URL)" $(PYTHON) scripts/dev.py
 
-backend: ## Start the FastAPI development server
+backend: migrate ## Start the FastAPI development server
 	$(UV) run --directory backend fastapi dev --host $(API_HOST) --port $(API_PORT)
 
 serve: ## Start the FastAPI production server
@@ -56,7 +63,7 @@ format: ## Format backend Python files
 format-check: ## Check backend formatting without changing files
 	$(UV) run --directory backend ruff format --check app alembic tests
 
-test: ## Run backend and frontend tests
+test: db ## Run backend and frontend tests
 	$(UV) run --directory backend pytest
 	$(NPM) --prefix frontend test
 

@@ -66,16 +66,13 @@ class ConversationMessagesResponse(BaseModel):
     messages: list[ConversationMessageResponse]
 
 
-class DocumentUploadResponse(BaseModel):
-    document_id: str
-    filename: str
-    chunks_indexed: int
-
-
 class IndexedDocument(BaseModel):
     document_id: str
     filename: str
     chunks_indexed: int
+    page_count: int
+    file_sha256: str
+    created_at: str
 
 
 class IndexedDocumentsResponse(BaseModel):

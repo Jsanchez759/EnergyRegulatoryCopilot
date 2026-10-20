@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from pwdlib import PasswordHash
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -43,6 +43,11 @@ def digest_token(token: str) -> str:
 
 async def issue_session(db: AsyncSession, user: User) -> str:
     token = secrets.token_urlsafe(48)
+    await db.execute(
+        delete(UserSession).where(
+            UserSession.user_id == user.id, UserSession.expires_at <= datetime.now(UTC)
+        )
+    )
     db.add(
         UserSession(
             user_id=user.id,

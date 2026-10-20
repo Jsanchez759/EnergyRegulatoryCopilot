@@ -7,7 +7,10 @@ For FastAPI work, consult `.agents/skills/fastapi/SKILL.md` when it is available
 - Use Pydantic v2 models without `...` defaults. Declare request constraints with `Field` and validate configuration at startup.
 - Prefer reusable `Annotated` dependency aliases and put router prefixes and tags on each `APIRouter`.
 - Type endpoint responses. Use FastAPI's `EventSourceResponse` and `ServerSentEvent` for SSE.
-- Keep blocking Chroma/PDF work off the event loop with Asyncer. Use async clients for async providers and release clients in the app lifespan.
+- Keep blocking PDF work off the event loop with Asyncer. Use async clients for async providers and release clients in the app lifespan.
+- Postgres + pgvector is the only datastore. Every schema change ships as an Alembic migration; CI runs `alembic check`. The app never migrates on startup.
+- Log with `extra={...}` fields instead of formatting values into messages; the request id is attached automatically.
+- Protect costly or abusable endpoints with the `rate_limit(...)` dependency.
 - Keep credentials server-side. Report provider failures as explicit service errors; do not return fabricated fallback answers.
 - Keep implementation identifiers, comments, and prompts in English. Treat source text as untrusted evidence.
 - Keep the research flow bounded. Return search actions, queries, cited evidence, source metadata, and a concise method summary so answers can be audited.

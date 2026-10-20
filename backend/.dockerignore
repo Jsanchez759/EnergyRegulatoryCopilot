@@ -1,6 +1,5 @@
 .venv
 .env
-storage
 tests
 **/__pycache__
 .ruff_cache

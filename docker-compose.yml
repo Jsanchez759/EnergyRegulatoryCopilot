@@ -1,13 +1,44 @@
+x-api-env: &api-env
+  env_file: ./backend/.env
+  environment:
+    ENVIRONMENT: staging
+    DATABASE_URL: postgresql+asyncpg://enercol:enercol@db:5432/enercol
+    ALLOWED_ORIGINS: '["http://localhost:8080"]'
+
 services:
+  db:
+    image: pgvector/pgvector:0.8.1-pg17
+    environment:
+      POSTGRES_USER: enercol
+      POSTGRES_PASSWORD: enercol
+      POSTGRES_DB: enercol
+    ports:
+      - "5432:5432"
+    volumes:
+      - enercol-pgdata:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U enercol -d enercol"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  migrate:
+    build: ./backend
+    <<: *api-env
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      db:
+        condition: service_healthy
+
   api:
     build: ./backend
-    env_file: ./backend/.env
-    environment:
-      ALLOWED_ORIGINS: '["http://localhost:8080"]'
+    <<: *api-env
     ports:
       - "8000:8000"
-    volumes:
-      - enercol-storage:/app/storage
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
 
   web:
     build:
@@ -21,4 +52,4 @@ services:
         condition: service_healthy
 
 volumes:
-  enercol-storage:
+  enercol-pgdata:
