@@ -2,10 +2,12 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
+from llama_index.core.workflow.errors import WorkflowTimeoutError
 
 from app.schemas.agent import EvidenceSource
 from app.services import agent_service as agent_module
 from app.services.agent_service import AgentService
+from app.services.errors import ProviderUnavailableError
 
 
 class SilentHandler:
@@ -30,13 +32,22 @@ class SilentAgent:
         return SilentHandler()
 
 
+class TimedOutHandler(SilentHandler):
+    def __await__(self):
+        async def result():
+            raise WorkflowTimeoutError("Operation timed out after 90 seconds")
+
+        return result().__await__()
+
+
 class FakeLLM:
-    def __init__(self) -> None:
+    def __init__(self, reply: str = "Respuesta con evidencia [D1].") -> None:
+        self.reply = reply
         self.prompts: list[str] = []
 
     async def achat(self, messages):
         self.prompts.append(messages[-1].content)
-        return SimpleNamespace(message=SimpleNamespace(content="Respuesta con evidencia [D1]."))
+        return SimpleNamespace(message=SimpleNamespace(content=self.reply))
 
 
 class FakeDocuments:
@@ -86,3 +97,86 @@ def test_agent_that_skips_tools_still_answers_from_retrieved_evidence(service) -
     audit = next(event["audit"] for event in events if "audit" in event)
     assert [source["id"] for source in audit["sources"]] == ["D1"]
     assert events[-1] == {"done": True}
+
+
+def test_inline_reasoning_tags_are_removed_from_the_answer(service) -> None:
+    agent, llm = service
+    llm.reply = "<thinking>Debo resumir las fuentes.</thinking>\n\nRespuesta limpia [D1]."
+    events = collect(agent)
+    assert {"answer": "Respuesta limpia [D1]."} in events
+
+
+def test_agent_timeout_is_reported_as_provider_failure(service, monkeypatch) -> None:
+    agent, _ = service
+    monkeypatch.setattr(SilentAgent, "run", lambda self, **_kwargs: TimedOutHandler())
+    with pytest.raises(ProviderUnavailableError):
+        collect(agent)
+
+
+def test_domain_filtered_web_search_omits_country() -> None:
+    filtered = AgentService._web_search_payload("CREG 174", ["creg.gov.co"])
+    assert filtered["include_domains"] == ["creg.gov.co"]
+    assert "country" not in filtered
+    assert AgentService._web_search_payload("CREG 174", None)["country"] == "Colombia"
+
+
+class FakeTavily:
+    def __init__(self) -> None:
+        self.payloads: list[dict[str, object]] = []
+
+    async def post(self, url, headers, json):
+        self.payloads.append(json)
+        results = (
+            []
+            if json.get("include_domains")
+            else [
+                {
+                    "title": "Ley 1715 de 2014",
+                    "url": "https://www.funcionpublica.gov.co/ley-1715",
+                    "content": "Incentivos tributarios para FNCE.",
+                    "score": 0.9,
+                }
+            ]
+        )
+        return SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"results": results})
+
+    async def aclose(self) -> None:
+        pass
+
+
+def test_empty_domain_search_widens_to_open_web(service, monkeypatch) -> None:
+    agent, _ = service
+    tavily = FakeTavily()
+    agent._web_client = tavily
+    monkeypatch.setattr(agent_module.settings, "TAVILY_API_KEY", "test-key")
+
+    class DomainSearchingAgent:
+        def __init__(self, tools, **_kwargs) -> None:
+            self.search_web = tools[1]
+
+        def run(self, **_kwargs):
+            search_web = self.search_web
+
+            class Handler(SilentHandler):
+                def __await__(self):
+                    async def result():
+                        await search_web("Ley 1715 beneficios", domains=["energia.gov.co"])
+                        return SimpleNamespace(
+                            response=SimpleNamespace(content="Hay incentivos tributarios [W1]."),
+                            raw=None,
+                        )
+
+                    return result().__await__()
+
+            return Handler()
+
+    monkeypatch.setattr(agent_module, "FunctionAgent", DomainSearchingAgent)
+    events = collect(agent)
+
+    assert [payload.get("include_domains") for payload in tavily.payloads] == [
+        ["energia.gov.co"],
+        None,
+    ]
+    audit = next(event["audit"] for event in events if "audit" in event)
+    assert audit["steps"][0]["summary"].startswith("No results on energia.gov.co.")
+    assert [source["id"] for source in audit["sources"]] == ["W1"]
