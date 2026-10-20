@@ -6,8 +6,10 @@ from pydantic import BaseModel, Field
 
 
 class ChatMessage(BaseModel):
+    """A stored conversation turn passed to the agent as context, not a request body."""
+
     role: Literal["user", "assistant"]
-    content: str = Field(min_length=1, max_length=4000)
+    content: str
 
 
 class AgentRequest(BaseModel):

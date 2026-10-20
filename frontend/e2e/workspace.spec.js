@@ -109,4 +109,12 @@ test("general question is answered and persisted without document errors", async
   await expect(answer.locator(".message-content")).not.toBeEmpty();
   await expect(answer).not.toContainText("TypeError");
   await expect(page.locator(".conversation-title").first()).toContainText("¿Qué es la CREG?");
+
+  await page.getByLabel("Escribe tu consulta").fill("Explícame con más detalle sus funciones principales.");
+  await page.getByRole("button", { name: "Enviar consulta" }).click();
+  await expect(page.locator(".message-row.assistant")).toHaveCount(2);
+  await expect(page.locator(".stream-status")).toHaveText(/Completado|Error/, { timeout: 170_000 });
+  const followUp = page.locator(".message-row.assistant").last().locator(".message-content");
+  await expect(followUp).not.toContainText("No se pudo completar");
+  await expect(followUp).not.toBeEmpty();
 });

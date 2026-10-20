@@ -108,3 +108,44 @@ def test_stream_rejects_foreign_conversation(make_user) -> None:
 
     assert response.status_code == 404
     assert fake.calls == []
+
+
+def test_long_previous_answers_do_not_break_follow_up_questions(make_user) -> None:
+    user = make_user()
+    conversation_id = create_conversation(user)
+    long_answer = "Detalle regulatorio. " * 600
+    first = FakeAgentService([{"answer": long_answer}, {"done": True}])
+    second = FakeAgentService([{"answer": "Seguimiento."}, {"done": True}])
+    payload = {"conversation_id": conversation_id, "question": "¿Qué es la CREG?"}
+    try:
+        user.app.dependency_overrides[get_agent_service] = lambda: first
+        user.post("/api/v1/agent/stream", json=payload)
+        user.app.dependency_overrides[get_agent_service] = lambda: second
+        response = user.post("/api/v1/agent/stream", json={**payload, "question": "Amplía eso"})
+    finally:
+        user.app.dependency_overrides.clear()
+
+    assert {"answer": "Seguimiento."} in sse_payloads(response.text)
+    _, history, _ = second.calls[0]
+    assert [item.role for item in history] == ["user", "assistant"]
+    assert len(history[1].content) <= 6000
+
+
+def test_unexpected_agent_errors_are_reported_and_persisted(make_user) -> None:
+    user = make_user()
+    conversation_id = create_conversation(user)
+    fake = FakeAgentService([{"delta": "Parcial"}], error=RuntimeError("boom"))
+    user.app.dependency_overrides[get_agent_service] = lambda: fake
+    try:
+        response = user.post(
+            "/api/v1/agent/stream",
+            json={"conversation_id": conversation_id, "question": "¿Qué es la CREG?"},
+        )
+    finally:
+        user.app.dependency_overrides.clear()
+
+    payloads = sse_payloads(response.text)
+    assert {"error": "Ocurrió un error inesperado. Inténtalo de nuevo."} in payloads
+    assert payloads[-1] == {"done": True}
+    messages = user.get(f"/api/v1/conversations/{conversation_id}/messages").json()["messages"]
+    assert messages[-1]["content"].startswith("No se pudo completar la consulta.")
