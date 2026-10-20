@@ -134,7 +134,9 @@ def test_processing_indexes_text_relations_files_and_events(harness) -> None:
     )
     assert original.label == "Creg174-2021.pdf"
     assert original.storage_key is not None
-    assert h.scalar(select(NormEvent.kind).where(NormEvent.norm_id == norm_id)) == "norma_nueva"
+    assert h.scalar(select(NormEvent.kind).where(NormEvent.norm_id == norm_id)) == (
+        "norma_incorporada"
+    ), "a 2021 resolution found today is backfill, not news"
 
 
 def test_reprocessing_uses_conditional_requests_and_versions_changes(harness) -> None:
@@ -153,7 +155,7 @@ def test_reprocessing_uses_conditional_requests_and_versions_changes(harness) ->
     assert h.run(h.pipeline.process_norm(norm_id)) == "indexed"
     assert h.scalar(select(func.count()).where(NormVersion.norm_id == norm_id)) == 2
     kinds = h.scalar(select(func.array_agg(NormEvent.kind)).where(NormEvent.norm_id == norm_id))
-    assert sorted(kinds) == ["norma_actualizada", "norma_nueva"]
+    assert sorted(kinds) == ["norma_actualizada", "norma_incorporada"]
 
 
 def test_listing_derogation_requeues_and_changes_status(harness) -> None:
@@ -200,3 +202,14 @@ def test_new_discovery_closes_interrupted_runs(harness) -> None:
     h.run(h.pipeline.discover_creg(years=[2015], mode="backfill"))
     statuses = h.scalar(select(func.array_agg(CrawlRun.status)).where(CrawlRun.source == "creg"))
     assert sorted(statuses) == ["abandoned", "succeeded"]
+
+
+def test_recently_published_norms_are_news(harness, monkeypatch) -> None:
+    from app.corpus import pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module, "_recently_published", lambda published: True)
+    url = doc_url(RES_174)
+    h = harness({url: fixture(RES_174)})
+    norm_id = h.run(h.pipeline._upsert_from_listing(_listing_item(url)))
+    h.run(h.pipeline.process_norm(norm_id))
+    assert h.scalar(select(NormEvent.kind).where(NormEvent.norm_id == norm_id)) == "norma_nueva"

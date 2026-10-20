@@ -12,6 +12,7 @@ from app.api.dependencies import (
     rate_limit,
 )
 from app.core.config import settings
+from app.corpus.catalog import SOURCES, key_label, norm_label
 from app.corpus.models import CrawlRun, Norm, NormEvent, NormFile, NormRelation
 from app.schemas.corpus import (
     CorpusSearchHit,
@@ -26,6 +27,8 @@ from app.schemas.corpus import (
     NormListResponse,
     NormRelationOut,
     NormSummary,
+    SourceCatalogEntry,
+    SourceCatalogResponse,
     SourceStatus,
 )
 
@@ -36,6 +39,7 @@ def summary(norm: Norm) -> NormSummary:
     return NormSummary(
         id=norm.id,
         key=norm.key,
+        label=norm_label(norm.source, norm.doc_type, norm.number, norm.year),
         source=norm.source,
         doc_type=norm.doc_type,
         number=norm.number,
@@ -53,13 +57,14 @@ def summary(norm: Norm) -> NormSummary:
 async def list_norms(
     corpus: CorpusServiceDep,
     q: Annotated[str | None, Query(max_length=200)] = None,
+    source: Annotated[str | None, Query(max_length=40)] = None,
     doc_type: Annotated[str | None, Query(max_length=40)] = None,
     status: Annotated[str | None, Query(max_length=20)] = None,
     year: Annotated[int | None, Query(ge=1990, le=2100)] = None,
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
 ) -> NormListResponse:
-    total, norms = await corpus.find_norms(q, doc_type, status, year, offset, limit)
+    total, norms = await corpus.find_norms(q, source, doc_type, status, year, offset, limit)
     return NormListResponse(total=total, items=[summary(norm) for norm in norms])
 
 
@@ -89,11 +94,9 @@ async def get_norm(norm_id: str, db: DbSessionDep) -> NormDetail:
             to_article=relation.to_article,
             evidence=relation.evidence,
             other_norm_id=other.id if other else None,
-            other_norm_label=other.articles[0].norm_label if other and other.articles else None,
+            other_norm_label=key_label(other_key),
         )
 
-    for other in related.values():
-        await db.refresh(other, ["articles"])
     return NormDetail(
         **summary(norm).model_dump(),
         diario_oficial=norm.diario_oficial,
@@ -140,6 +143,7 @@ async def search_corpus(
         hits=[
             CorpusSearchHit(
                 norm_id=hit.norm_id,
+                source=hit.source,
                 norm_label=hit.norm_label,
                 title=hit.title,
                 doc_type=hit.doc_type,
@@ -156,10 +160,30 @@ async def search_corpus(
     )
 
 
+@router.get("/sources", summary="Catalog of regulatory sources and their document types")
+async def list_sources() -> SourceCatalogResponse:
+    return SourceCatalogResponse(
+        sources=[
+            SourceCatalogEntry(
+                id=info.id,
+                name=info.name,
+                full_name=info.full_name,
+                url=info.url,
+                doc_types=info.doc_types,
+            )
+            for info in SOURCES.values()
+        ]
+    )
+
+
 @router.get("/events", summary="Latest changes in the corpus")
 async def list_events(
     db: DbSessionDep,
-    kind: Annotated[str | None, Query(max_length=30)] = None,
+    kind: Annotated[
+        str | None, Query(max_length=200, description="One event kind or a comma-separated list")
+    ] = None,
+    source: Annotated[str | None, Query(max_length=40)] = None,
+    offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
 ) -> FeedResponse:
     statement = (
@@ -169,7 +193,10 @@ async def list_events(
         .limit(limit)
     )
     if kind:
-        statement = statement.where(NormEvent.kind == kind)
+        statement = statement.where(NormEvent.kind.in_([item.strip() for item in kind.split(",")]))
+    if source:
+        statement = statement.where(Norm.source == source)
+    statement = statement.offset(offset)
     rows = await db.execute(statement)
     return FeedResponse(
         events=[

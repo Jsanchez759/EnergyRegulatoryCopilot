@@ -1,7 +1,7 @@
 import hashlib
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import delete, select, update
@@ -28,6 +28,8 @@ from app.services.errors import ProviderUnavailableError
 logger = logging.getLogger(__name__)
 
 PROCESS_ENTRYPOINT = "corpus.process"
+# Norms first seen within this window of their publication are news; older ones are backfill.
+NEWS_WINDOW = timedelta(days=60)
 # Below this, the HTML is a stub (e.g. only a header) and the PDF holds the real text.
 MIN_HTML_TEXT_CHARS = 1500
 
@@ -287,7 +289,13 @@ class CorpusPipeline:
                 for relation in parsed.relations
             )
             await self._sync_files(db, norm_id, parsed.files, primary, pdf)
-            kind = "norma_nueva" if previous_hash is None else "norma_actualizada"
+            kind = (
+                "norma_actualizada"
+                if previous_hash is not None
+                else "norma_nueva"
+                if _recently_published(parsed.published_on or parsed.issued_on)
+                else "norma_incorporada"
+            )
             db.add(
                 NormEvent(
                     norm_id=norm_id,
@@ -404,3 +412,7 @@ def _status(doc_type: str, derogated_in_text: bool, extra: dict[str, Any]) -> st
     if doc_type == "proyecto_resolucion":
         return "proyecto"
     return "derogada" if derogated_in_text or extra.get("listing_derogated") else "vigente"
+
+
+def _recently_published(published: date | None) -> bool:
+    return published is not None and published >= utc_now().date() - NEWS_WINDOW

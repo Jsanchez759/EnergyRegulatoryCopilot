@@ -72,8 +72,12 @@ def test_detail_includes_articles_amendments_and_original_file(make_user, indexe
 def test_feed_and_status_report_the_indexed_norms(make_user, indexed) -> None:
     user = make_user()
     events = user.get("/api/v1/corpus/events").json()["events"]
-    assert {event["kind"] for event in events} == {"norma_nueva"}
+    assert {event["kind"] for event in events} == {"norma_incorporada"}
     assert len(events) == 3
+    news = user.get(
+        "/api/v1/corpus/events", params={"kind": "norma_nueva,norma_actualizada"}
+    ).json()["events"]
+    assert news == []
 
     status = user.get("/api/v1/corpus/status").json()["sources"]
     assert status == [
@@ -85,3 +89,34 @@ def test_feed_and_status_report_the_indexed_norms(make_user, indexed) -> None:
             "by_status": {"vigente": 2, "proyecto": 1},
         }
     ]
+
+
+def test_labels_cover_crawled_and_external_norms() -> None:
+    from app.corpus.catalog import key_label
+
+    assert key_label("creg:resolucion:101-99:2026") == "Resolución CREG 101 99 de 2026"
+    assert key_label("creg:proyecto_resolucion:701-116:2026") == (
+        "Proyecto de Resolución CREG 701 116 de 2026"
+    )
+    assert key_label("co:decreto:1073:2015") == "Decreto 1073 de 2015"
+    assert key_label("minenergia:resolucion:40072:2018") == "Resolución MinEnergía 40072 de 2018"
+
+
+def test_catalog_and_source_filters(make_user, indexed) -> None:
+    user = make_user()
+    catalog = user.get("/api/v1/corpus/sources").json()["sources"]
+    assert catalog[0]["id"] == "creg"
+    assert catalog[0]["doc_types"]["proyecto_resolucion"] == "Proyecto de Resolución"
+
+    creg_norms = user.get("/api/v1/corpus/norms", params={"source": "creg"}).json()
+    assert creg_norms["total"] == 3
+    assert creg_norms["items"][0]["label"].startswith(("Resolución CREG", "Proyecto"))
+    assert user.get("/api/v1/corpus/norms", params={"source": "upme"}).json()["total"] == 0
+    assert user.get("/api/v1/corpus/events", params={"source": "upme"}).json()["events"] == []
+
+
+def test_amendments_by_norms_outside_the_corpus_still_have_labels(make_user, indexed) -> None:
+    user = make_user()
+    detail = user.get(f"/api/v1/corpus/norms/{indexed[RES_174]}").json()
+    amendment = next(item for item in detail["amended_by"] if item["to_article"] == "Artículo 1")
+    assert amendment["other_norm_label"] == "Resolución CREG 101 99 de 2026"

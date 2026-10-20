@@ -6,6 +6,7 @@ from pydantic import BaseModel
 class NormSummary(BaseModel):
     id: str
     key: str
+    label: str
     source: str
     doc_type: str
     number: str
@@ -46,7 +47,7 @@ class NormRelationOut(BaseModel):
     to_article: str
     evidence: str
     other_norm_id: str | None
-    other_norm_label: str | None
+    other_norm_label: str
 
 
 class NormEventOut(BaseModel):
@@ -67,6 +68,7 @@ class NormDetail(NormSummary):
 
 class CorpusSearchHit(BaseModel):
     norm_id: str
+    source: str
     norm_label: str
     title: str
     doc_type: str
@@ -108,3 +110,15 @@ class SourceStatus(BaseModel):
 
 class CorpusStatusResponse(BaseModel):
     sources: list[SourceStatus]
+
+
+class SourceCatalogEntry(BaseModel):
+    id: str
+    name: str
+    full_name: str
+    url: str
+    doc_types: dict[str, str]
+
+
+class SourceCatalogResponse(BaseModel):
+    sources: list[SourceCatalogEntry]

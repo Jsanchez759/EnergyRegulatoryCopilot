@@ -21,6 +21,7 @@ DEROGATED_WEIGHT = 0.6
 class CorpusHit:
     norm_id: str
     norm_key: str
+    source: str
     norm_label: str
     title: str
     doc_type: str
@@ -92,6 +93,7 @@ class CorpusService:
                 CorpusHit(
                     norm_id=norm.id,
                     norm_key=norm.key,
+                    source=norm.source,
                     norm_label=article.norm_label,
                     title=norm.title,
                     doc_type=norm.doc_type,
@@ -113,6 +115,7 @@ class CorpusService:
     async def find_norms(
         self,
         query: str | None,
+        source: str | None,
         doc_type: str | None,
         status: str | None,
         year: int | None,
@@ -130,6 +133,8 @@ class CorpusService:
                     Norm.key.ilike(f"%{compact}%"),
                 )
             )
+        if source:
+            conditions.append(Norm.source == source)
         if doc_type:
             conditions.append(Norm.doc_type == doc_type)
         if status:

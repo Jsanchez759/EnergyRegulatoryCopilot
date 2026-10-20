@@ -11,6 +11,7 @@ from urllib.parse import unquote, urljoin
 
 from bs4 import BeautifulSoup
 
+from app.corpus.catalog import norm_label
 from app.corpus.text import decode_html, normalize_whitespace
 
 SOURCE = "creg"
@@ -132,8 +133,7 @@ class ParsedNorm:
 
     @property
     def label(self) -> str:
-        kind = "Proyecto de Resolución" if self.doc_type == "proyecto_resolucion" else "Resolución"
-        return f"{kind} CREG {self.number.replace('-', ' ')} de {self.year}"
+        return norm_label(SOURCE, self.doc_type, self.number, self.year)
 
 
 def listing_urls(year: int) -> list[str]:

@@ -211,6 +211,7 @@ class FakeCorpus:
             CorpusHit(
                 norm_id="n1",
                 norm_key="creg:resolucion:174:2021",
+                source="creg",
                 norm_label="Resolución CREG 174 de 2021",
                 title="Por la cual se regulan las actividades de autogeneración a pequeña escala",
                 doc_type="resolucion",
