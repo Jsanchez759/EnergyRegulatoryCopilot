@@ -245,3 +245,67 @@ def test_corpus_is_searched_first_and_cited_with_status(monkeypatch) -> None:
     regulation = next(source for source in audit["sources"] if source["id"] == "R1")
     assert regulation["kind"] == "regulation"
     assert regulation["status"] == "vigente"
+
+
+def test_market_tools_cite_xm_series_with_chart_data(monkeypatch) -> None:
+    import httpx
+
+    from app.services import market_service
+    from app.services.market_service import MarketService
+    from tests.test_market_service import FakeXM
+    from tests.test_market_service import fixture as xm_fixture
+
+    class Today(market_service.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return market_service.datetime(2026, 10, 20, 12, tzinfo=tz)
+
+    monkeypatch.setattr(market_service, "datetime", Today)
+    fake = FakeXM({("hourly", "PrecBolsNaci"): xm_fixture("prec")})
+    market = MarketService(transport=httpx.MockTransport(fake.handler))
+    outputs: list[str] = []
+
+    class MarketAgent:
+        def __init__(self, tools, system_prompt, **_kwargs) -> None:
+            self.tools = {tool.__name__: tool for tool in tools}
+            self.system_prompt = system_prompt
+
+        def run(self, **_kwargs):
+            tools = self.tools
+
+            class Handler(SilentHandler):
+                def __await__(self):
+                    async def result():
+                        outputs.append(await tools["find_market_metrics"]("precio de bolsa"))
+                        outputs.append(
+                            await tools["get_market_data"](
+                                "PrecBolsNaci", "2026-10-01", "2026-10-02"
+                            )
+                        )
+                        outputs.append(
+                            await tools["get_market_data"](
+                                "PrecBolsNaci", "2026-10-01", "2026-10-02", entity="Embalse"
+                            )
+                        )
+                        return SimpleNamespace(
+                            response=SimpleNamespace(content="El precio subió [M1]."), raw=None
+                        )
+
+                    return result().__await__()
+
+            return Handler()
+
+    monkeypatch.setattr(agent_module, "FunctionAgent", MarketAgent)
+    agent = AgentService(FakeDocuments(), market_service=market)
+    agent._llm = FakeLLM()
+    events = collect(agent, question="¿Cómo estuvo el precio de bolsa el 1 y 2 de octubre?")
+
+    assert "metric_id=PrecBolsNaci entity=Sistema" in outputs[0]
+    assert outputs[1].startswith("[M1] XM · Precio Bolsa Nacional por Sistema")
+    assert "Unknown metric 'PrecBolsNaci' for entity 'Embalse'" in outputs[2]
+    audit = next(event["audit"] for event in events if "audit" in event)
+    market_source = next(source for source in audit["sources"] if source["id"] == "M1")
+    assert market_source["kind"] == "market"
+    assert market_source["chart"]["unit"] == "COP/kWh"
+    assert len(market_source["chart"]["x"]) == 48
+    assert "XM market data" in audit["method"]

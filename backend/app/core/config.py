@@ -27,7 +27,12 @@ class Settings(BaseSettings):
     OPENROUTER_EMBEDDING_MODEL: str = "perplexity/pplx-embed-v1-0.6b"
     TAVILY_API_KEY: str = Field(default="", repr=False)
 
-    AGENT_MAX_ITERATIONS: int = Field(default=4, ge=1, le=8)
+    XM_API_URL: str = "https://servapibi.xm.com.co"
+    XM_TIMEOUT_SECONDS: float = Field(default=30.0, gt=0, le=120)
+    # Each request covers at most a month, so this bounds the requests behind one tool call.
+    MARKET_MAX_RANGE_DAYS: int = Field(default=366, ge=31, le=3660)
+
+    AGENT_MAX_ITERATIONS: int = Field(default=6, ge=1, le=10)
     AGENT_MAX_OUTPUT_TOKENS: int = Field(default=4096, ge=256, le=8192)
     AGENT_CONTEXT_WINDOW: int = Field(default=32768, ge=1024)
     AGENT_TIMEOUT_SECONDS: float = Field(default=90.0, gt=0, le=300)

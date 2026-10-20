@@ -33,7 +33,7 @@ class ConversationListResponse(BaseModel):
 
 class EvidenceSource(BaseModel):
     id: str
-    kind: Literal["regulation", "document", "web"]
+    kind: Literal["regulation", "document", "web", "market"]
     title: str
     snippet: str
     url: str | None = None
@@ -42,6 +42,8 @@ class EvidenceSource(BaseModel):
     file_sha256: str | None = None
     status: str | None = None
     indexed_at: str | None = None
+    # Market series for a chart: {"unit", "x": [...], "series": [{"name", "values"}]}.
+    chart: dict | None = None
 
 
 class AuditStep(BaseModel):

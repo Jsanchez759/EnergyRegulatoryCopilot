@@ -1,6 +1,7 @@
 import logging
 import re
 from collections.abc import AsyncIterator
+from datetime import datetime
 
 import httpx
 from llama_index.core.agent.workflow import (
@@ -20,6 +21,13 @@ from app.schemas.agent import AgentAudit, AuditStep, ChatMessage, EvidenceSource
 from app.services.corpus_service import CorpusService
 from app.services.document_service import DocumentService
 from app.services.errors import ProviderUnavailableError
+from app.services.market_service import (
+    COLOMBIA,
+    SINERGOX_URL,
+    MarketDataError,
+    MarketService,
+    parse_date,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,12 +38,20 @@ Research:
 - Before searching, turn the request into a standalone query. Resolve references such as "esa
   resolución" or "explícalo mejor" with the conversation history; never search for the literal
   follow-up wording.
-- Search the regulatory corpus first: it holds official CREG electricity resolutions and drafts
-  since 2015, consolidated with their amendments, and states whether each norm is vigente,
-  derogada or a proyecto. Prefer it over the web for anything it covers.
+- Search the regulatory corpus first: it holds official electricity regulation since 2015 from
+  the CREG (resolutions and drafts, consolidated with their amendments) and the Ministerio de Minas
+  y Energía (resolutions, decrees and drafts open for comments), and states whether each norm is
+  vigente, derogada or a proyecto. Prefer it over the web for anything it covers.
 - Search uploaded documents when the user refers to their own files. Search the web for what the
-  corpus does not cover (laws, decrees, Ministerio de Minas y Energía, UPME, Superservicios) or for
-  recent news, preferring official Colombian sources.
+  corpus does not cover (laws, UPME, Superservicios, other entities) or for recent news,
+  preferring official Colombian sources.
+- For figures about the wholesale electricity market (spot price, scarcity price, demand,
+  generation by plant or technology, reservoirs, inflows, contracts, exports, emissions), use XM's
+  live data: find_market_metrics to choose the metric, find_market_codes when the user names a
+  plant, agent, reservoir or river, then get_market_data. Prefer system-level metrics unless the
+  user asks for a breakdown, keep ranges as short as the question allows, and remember XM
+  publishes with a delay of about one day. Report the period and units, and never estimate or
+  invent figures that the data does not contain.
 - When you rely on a derogated norm or a draft, say so explicitly next to the citation.
 - When the first results are thin, search again for the specific articles, definitions, thresholds
   or procedures you need.
@@ -49,7 +65,10 @@ Answer:
   where they help. Aim for 600 to 1200 words unless the user asks for brevity or the question is
   trivial.
 - Every sentence that relies on a retrieved source must end with that source's id in square
-  brackets, such as [D1] or [W2]. Never invent ids or cite sources you did not retrieve.
+  brackets, such as [R1], [D1], [W2] or [M1]. Never invent ids or cite sources you did not
+  retrieve.
+- When market data is part of the answer, give the key figures (average, extremes with their
+  dates, change over the period) in a short table; the interface draws the chart.
 - Do not write about your method, the tools, the searches, or how reliable or current the sources
   are; the interface already shows that. No closing list of sources, no "inferencias" section and
   no generic disclaimers.
@@ -62,6 +81,11 @@ Answer:
 # Some models emit their scratchpad inline instead of in a separate reasoning field.
 REASONING_TAGS = re.compile(r"<(thinking|think)>.*?</\1>\s*", re.DOTALL | re.IGNORECASE)
 
+NO_FIGURES = (
+    "No figures were retrieved by this call. Fix the request and call again, or tell the user "
+    "these figures are unavailable; never write numbers for them."
+)
+
 TRUNCATION_NOTICE = (
     "_La respuesta se interrumpió por el límite de longitud del modelo. "
     "Pide que continúe o formula una pregunta más específica._"
@@ -72,10 +96,14 @@ class AgentService:
     """Run a bounded, tool-using research agent and return an auditable event stream."""
 
     def __init__(
-        self, document_service: DocumentService, corpus_service: CorpusService | None = None
+        self,
+        document_service: DocumentService,
+        corpus_service: CorpusService | None = None,
+        market_service: MarketService | None = None,
     ) -> None:
         self._documents = document_service
         self._corpus = corpus_service
+        self._market = market_service
         self._web_client = httpx.AsyncClient(timeout=20.0)
         self._llm = (
             OpenRouter(
@@ -243,15 +271,131 @@ class AgentService:
             )
             return "\n\n".join(formatted) if formatted else "No web results were found."
 
+        async def find_market_metrics(query: str) -> str:
+            """Find XM wholesale-market metrics matching a description, in Spanish.
+
+            Returns metric ids with their entity, unit, granularity and description, to pass to
+            get_market_data. Examples: "precio de bolsa", "demanda real", "volumen útil embalses".
+            """
+            try:
+                metrics = await self._market.find_metrics(query)
+            except ProviderUnavailableError as exc:
+                add_step(AuditStep(tool="find_market_metrics", query=query, summary=str(exc)))
+                return str(exc)
+            add_step(
+                AuditStep(
+                    tool="find_market_metrics",
+                    query=query,
+                    summary=f"Found {len(metrics)} candidate market metric(s).",
+                )
+            )
+            return (
+                "\n".join(
+                    f"- metric_id={item.metric_id} entity={item.entity} unit={item.units or '-'} "
+                    f"granularity={item.granularity}: {item.name}. {item.description[:240]}"
+                    + (f" RECOMMENDED: {item.note}." if item.note else "")
+                    for item in metrics
+                )
+                or "No market metric matches; try other words."
+            )
+
+        async def find_market_codes(entity: str, query: str) -> str:
+            """Find the XM code of a named plant, company, reservoir or river.
+
+            entity is exactly one of "Recurso" (plant), "Agente" (company), "Embalse" or "Rio".
+            Use it only to filter get_market_data by name; find_market_metrics finds metrics.
+            """
+            try:
+                codes = await self._market.find_codes(entity, query)
+            except (MarketDataError, ProviderUnavailableError) as exc:
+                add_step(AuditStep(tool="find_market_codes", query=query, summary=str(exc)))
+                return str(exc)
+            add_step(
+                AuditStep(
+                    tool="find_market_codes",
+                    query=f"{entity}: {query}",
+                    summary=f"Found {len(codes)} matching code(s).",
+                )
+            )
+            return (
+                "\n".join(f"- {item.code}: {item.name} ({item.detail})" for item in codes)
+                or "No code matches that name."
+            )
+
+        async def get_market_data(
+            metric_id: str,
+            start_date: str,
+            end_date: str,
+            entity: str = "Sistema",
+            codes: list[str] | str | None = None,
+            group_by_technology: bool = False,
+        ) -> str:
+            """Fetch an XM market series and return summary statistics and aggregated rows.
+
+            Dates are YYYY-MM-DD and inclusive. entity must be one listed for the metric by
+            find_market_metrics. codes filters non-system entities (plants, agents, reservoirs).
+            group_by_technology=true sums generation by plant technology (entity "Recurso").
+            """
+            if isinstance(codes, str):
+                codes = [code for code in re.split(r"[,\s]+", codes) if code]
+            query = f"{metric_id} ({entity}) {start_date} a {end_date}"
+            if codes:
+                query += f" · {', '.join(codes)}"
+            try:
+                series = await self._market.series(
+                    metric_id,
+                    parse_date(start_date),
+                    parse_date(end_date),
+                    entity=entity,
+                    codes=codes,
+                    group_by_technology=group_by_technology,
+                )
+            except (MarketDataError, ProviderUnavailableError) as exc:
+                add_step(AuditStep(tool="get_market_data", query=query, summary=str(exc)))
+                return f"{exc}\n{NO_FIGURES}"
+            if not series.rows:
+                summary = "XM returned no data for that period."
+                add_step(AuditStep(tool="get_market_data", query=query, summary=summary))
+                return (
+                    f"{summary} It may not be published yet, or the codes do not match the "
+                    f"entity.\n{NO_FIGURES}"
+                )
+            text = series.summary_text()
+            source = self._add_source(
+                sources,
+                EvidenceSource(
+                    id="",
+                    kind="market",
+                    title=series.title,
+                    url=SINERGOX_URL,
+                    snippet=f"Consulta: {series.request}\n{text}"[:6000],
+                    chart=series.chart(),
+                ),
+            )
+            add_step(
+                AuditStep(
+                    tool="get_market_data",
+                    query=query,
+                    summary=f"Retrieved {len(series.rows)} row(s) of {series.metric.name}.",
+                    source_ids=[source.id],
+                )
+            )
+            return f"[{source.id}] {series.title}\n{text}"
+
         research_tools = [search_uploaded_documents, search_web]
         if self._corpus is not None:
             research_tools.insert(0, search_regulatory_corpus)
+        market_tools = (
+            [find_market_metrics, find_market_codes, get_market_data] if self._market else []
+        )
+        today = datetime.now(COLOMBIA).date()
+        system_prompt = f"{SYSTEM_PROMPT}\nToday is {today.isoformat()} in Colombia."
         agent = FunctionAgent(
             name="EnerColResearchAgent",
             description="Researches Colombian energy regulation using cited sources.",
-            tools=research_tools,
+            tools=[*research_tools, *market_tools],
             llm=llm,
-            system_prompt=SYSTEM_PROMPT,
+            system_prompt=system_prompt,
             timeout=settings.AGENT_TIMEOUT_SECONDS,
             max_retries=2,
             allow_parallel_tool_calls=False,
@@ -300,7 +444,11 @@ class AgentService:
                         "activity": {
                             "status": "running",
                             "tool": event.tool_name,
-                            "query": event.tool_kwargs.get("query", ""),
+                            "query": str(
+                                event.tool_kwargs.get("query")
+                                or event.tool_kwargs.get("metric_id")
+                                or ""
+                            ),
                             "summary": "Searching the selected source.",
                         }
                     }
@@ -373,7 +521,7 @@ class AgentService:
                 )
                 fallback = await llm.achat(
                     [
-                        LlamaChatMessage(role="system", content=SYSTEM_PROMPT),
+                        LlamaChatMessage(role="system", content=system_prompt),
                         LlamaChatMessage(
                             role="user",
                             content=(
@@ -488,7 +636,7 @@ class AgentService:
             )
             if existing_key == key:
                 return existing
-        prefix = {"regulation": "R", "document": "D", "web": "W"}[source.kind]
+        prefix = {"regulation": "R", "document": "D", "web": "W", "market": "M"}[source.kind]
         source.id = f"{prefix}{sum(item.kind == source.kind for item in sources.values()) + 1}"
         sources[source.id] = source
         return source
@@ -499,6 +647,7 @@ class AgentService:
             "search_regulatory_corpus": "EnerCol's regulatory corpus",
             "search_uploaded_documents": "uploaded PDFs",
             "search_web": "the web",
+            "get_market_data": "XM market data",
         }
         used = [
             names[tool] for tool in names if any(s.tool == tool and s.source_ids for s in steps)

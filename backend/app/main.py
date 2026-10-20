@@ -18,6 +18,7 @@ from app.services.agent_service import AgentService
 from app.services.corpus_service import CorpusService
 from app.services.document_service import DocumentService
 from app.services.embeddings import EmbeddingClient
+from app.services.market_service import MarketService
 
 setup_logging()
 init_sentry()
@@ -43,14 +44,18 @@ def create_application() -> FastAPI:
         application.state.corpus_service = CorpusService(
             SessionFactory, application.state.embeddings
         )
+        application.state.market_service = MarketService(application.state.embeddings)
         application.state.agent_service = AgentService(
-            application.state.document_service, application.state.corpus_service
+            application.state.document_service,
+            application.state.corpus_service,
+            application.state.market_service,
         )
         logger.info("application started", extra={"version": settings.VERSION})
         try:
             yield
         finally:
             await application.state.agent_service.close()
+            await application.state.market_service.close()
             await application.state.document_service.close()
             await application.state.embeddings.close()
             await engine.dispose()

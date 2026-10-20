@@ -91,6 +91,25 @@ Para agregar una fuente: implementa el protocolo `Source` de `app/corpus/sources
 `app/corpus/sources/registry.py` y añade su entrada en `app/corpus/catalog.py`. El pipeline, el
 worker (con sus horarios), el CLI, la API y la interfaz la toman sin más cambios.
 
+## Datos de mercado (XM)
+
+El agente consulta en vivo la API pública de XM (Sinergox, sin credenciales) para responder con
+cifras del mercado mayorista: precio de bolsa y de escasez, demanda, generación por planta o por
+tecnología, embalses, aportes, contratos, intercambios y emisiones.
+
+- **Herramientas del agente:** `find_market_metrics` busca entre las ~190 métricas del catálogo de
+  XM (léxico + embeddings, con métricas de referencia para las preguntas comunes),
+  `find_market_codes` traduce nombres de plantas, agentes, embalses o ríos a sus códigos, y
+  `get_market_data` trae la serie.
+- **Las cuentas las hace el código, no el modelo:** la serie se parte en ventanas de 30 días, se
+  convierte de unidad (kWh a GWh, fracciones a %) y se resume en totales o promedios según la
+  unidad, extremos por día y por hora, variación y como mucho 62 filas.
+- **Citas y gráficos:** cada serie es una fuente `[M1]` con la consulta exacta a XM, y la respuesta
+  la muestra como gráfico con la tabla de datos. Se guarda con la conversación.
+- **Caché en memoria:** el catálogo y las listas de códigos se refrescan a diario; las series viven
+  entre 1 y 12 horas según su granularidad. No hay tablas nuevas en la base de datos.
+- SIMEM y un histórico propio de series clave quedan para fases siguientes.
+
 ## Datos
 
 - Cuentas, sesiones, conversaciones, documentos y fragmentos con embeddings viven en Postgres.
@@ -161,6 +180,10 @@ Las opciones se definen en `backend/app/core/config.py` y se sobrescriben desde 
 | `CORPUS_START_YEAR` | `2015` | Primer año del rastreo completo |
 | `CRAWLER_USER_AGENT` | `EnerColBot/0.1 (+repo)` | Identificación ante las fuentes |
 | `OCR_LANGUAGE` / `OCR_MIN_CHARS_PER_PAGE` | `spa` / `200` | OCR con Tesseract para PDF escaneados |
+| `OCR_MAX_PAGES` | `40` | Páginas máximas por documento con OCR |
+| `XM_API_URL` / `XM_TIMEOUT_SECONDS` | `https://servapibi.xm.com.co` / `30` | API de datos de XM |
+| `MARKET_MAX_RANGE_DAYS` | `366` | Rango máximo de una consulta horaria o diaria (×3 para mensuales) |
+| `AGENT_MAX_ITERATIONS` | `6` | Pasos máximos del agente por pregunta |
 
 ## Frontend
 
@@ -203,6 +226,9 @@ Las respuestas 429 incluyen `Retry-After`.
   preguntas de prueba (unos 0,0003 USD por consulta). Los modelos gratuitos de OpenRouter no sirven:
   bloquean llamadas al azar y limitan a 20 solicitudes por minuto.
 - No hay verificación de correo ni recuperación de contraseña todavía.
+- Con el modelo por defecto, las preguntas de mercado a veces fallan: el modelo omite un filtro o
+  inventa un id de métrica. El servicio corrige los ids aproximados y nombra cada serie, pero un
+  modelo más capaz reduce estos errores.
 
 ## Estructura
 

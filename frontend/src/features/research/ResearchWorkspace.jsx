@@ -15,6 +15,8 @@ import {
 import { consumeSseResponse } from "../chat/stream";
 import { useDocuments } from "../documents/queries";
 import SourceLibrary from "../documents/SourceLibrary";
+import MarketChart from "./MarketChart";
+import { combineMarketSources } from "./marketSources";
 import { API_BASE_URL } from "../../lib/api";
 import Icon from "../../shared/Icon";
 import PrimaryNav, { BrandLink } from "../../shared/PrimaryNav";
@@ -27,6 +29,9 @@ const TOOL_LABELS = {
   search_regulatory_corpus: "Normativa",
   search_uploaded_documents: "Documentos",
   search_web: "Web",
+  find_market_metrics: "Métricas XM",
+  find_market_codes: "Códigos XM",
+  get_market_data: "Datos XM",
 };
 const NORM_STATUS_LABELS = {
   vigente: "Vigente según la CREG",
@@ -372,6 +377,8 @@ export default function ResearchWorkspace({ user }) {
                 <div className="message-column">
                   <div className="message-byline"><strong>{message.role === "user" ? "Tú" : message.meta || "EnerCol"}</strong><span>{nowLabel(message.created_at)}</span></div>
                   <div className="message-content markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown></div>
+                  {message.role === "assistant" && message.audit && combineMarketSources(message.audit.sources)
+                    .map((source) => <MarketChart key={source.id} source={source} />)}
                   {message.role === "assistant" && <AuditPanel audit={message.audit} />}
                 </div>
               </article>)}
