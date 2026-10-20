@@ -91,6 +91,11 @@ test("upload a PDF and get a cited answer from it", async ({ page }) => {
 
   await page.reload();
   await expect(page.locator(".message-row.assistant").last().locator(".message-content")).toContainText("9");
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Eliminar creg-999-2030-e2e.pdf" }).click();
+  await expect(page.locator(".document-entry")).toHaveCount(0);
+  await expect(page.getByText("Todavía no hay documentos.")).toBeVisible();
 });
 
 test("general question is answered and persisted without document errors", async ({ page }) => {

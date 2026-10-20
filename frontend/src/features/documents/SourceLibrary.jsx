@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 
-import { useDocuments, useUploadDocument } from "./queries";
+import { useDeleteDocument, useDocuments, useUploadDocument } from "./queries";
 import Icon from "../../shared/Icon";
 
 function messageForError(error) {
@@ -10,6 +10,7 @@ function messageForError(error) {
 export default function SourceLibrary({ onClose }) {
   const documentsQuery = useDocuments();
   const uploadMutation = useUploadDocument();
+  const deleteMutation = useDeleteDocument();
   const [selectedFile, setSelectedFile] = useState(null);
   const [status, setStatus] = useState("");
   const fileInputRef = useRef(null);
@@ -27,6 +28,16 @@ export default function SourceLibrary({ onClose }) {
       setSelectedFile(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
       setStatus(`${result.filename} · ${result.chunks_indexed} fragmentos indexados`);
+    } catch (error) {
+      setStatus(messageForError(error));
+    }
+  }
+
+  async function onDelete(doc) {
+    if (!window.confirm(`¿Eliminar «${doc.filename}» de tu biblioteca? Ya no se usará como fuente.`)) return;
+    try {
+      await deleteMutation.mutateAsync(doc.document_id);
+      setStatus(`${doc.filename} eliminado de la biblioteca.`);
     } catch (error) {
       setStatus(messageForError(error));
     }
@@ -61,11 +72,12 @@ export default function SourceLibrary({ onClose }) {
       </form>
       {visibleStatus && <p className={`document-status ${uploadMutation.isPending ? "is-loading" : ""}`} role="status">{visibleStatus}</p>}
 
-      <div className="library-heading"><span>Documentos indexados</span><span>{documents.length.toString().padStart(2, "0")}</span></div>
+      <div className="library-heading"><span>Documentos indexados</span><span>{documents.length}</span></div>
       {documents.length ? <div className="document-list">
         {documents.map((doc) => <div key={doc.document_id} className="document-entry">
           <span className="document-icon"><Icon name="file" size={17} /></span>
-          <span className="document-copy"><strong title={doc.filename}>{doc.filename}</strong><small>{doc.chunks_indexed} fragmentos indexados</small></span>
+          <span className="document-copy"><strong title={doc.filename}>{doc.filename}</strong><small>{doc.page_count} {doc.page_count === 1 ? "página" : "páginas"} · {doc.chunks_indexed} fragmentos</small></span>
+          <button className="document-delete" type="button" onClick={() => void onDelete(doc)} disabled={deleteMutation.isPending} aria-label={`Eliminar ${doc.filename}`} title="Eliminar">×</button>
         </div>)}
       </div> : <div className="empty-library">
         <Icon name="book" size={19} />

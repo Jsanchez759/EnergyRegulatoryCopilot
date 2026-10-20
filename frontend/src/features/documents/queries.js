@@ -17,6 +17,10 @@ async function uploadDocument(file) {
   });
 }
 
+async function deleteDocument(documentId) {
+  return requestJson(`${API_BASE_URL}/sources/${encodeURIComponent(documentId)}`, { method: "DELETE" });
+}
+
 export function useDocuments() {
   return useQuery({
     queryKey: documentsQueryKey,
@@ -30,6 +34,14 @@ export function useUploadDocument() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: uploadDocument,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: documentsQueryKey }),
+  });
+}
+
+export function useDeleteDocument() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: deleteDocument,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: documentsQueryKey }),
   });
 }

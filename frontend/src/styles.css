@@ -221,7 +221,7 @@ kbd { padding: 2px 4px; border: 1px solid var(--line); border-radius: 3px; backg
 .document-list { display: grid; gap: 2px; }
 .document-entry { min-width: 0; display: flex; align-items: center; gap: 9px; padding: 9px 4px; }
 .document-icon { width: 30px; height: 32px; flex: 0 0 30px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 5px; color: var(--accent); }
-.document-copy { min-width: 0; display: grid; gap: 4px; }
+.document-copy { min-width: 0; flex: 1; display: grid; gap: 4px; }
 .document-copy strong { overflow: hidden; color: var(--ink); font-size: 9px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .document-copy small { color: var(--muted); font-size: 8px; }
 .empty-library { min-height: 76px; display: flex; align-items: center; gap: 10px; padding: 13px 3px; color: var(--muted); font-size: 9px; line-height: 1.55; }
@@ -500,3 +500,8 @@ kbd { padding: 2px 4px; border: 1px solid var(--line); border-radius: 3px; backg
 @media (max-width: 700px) {
   .history-resize-handle { display: none; }
 }
+
+.document-delete { width: 25px; height: 25px; flex: 0 0 25px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 17px; opacity: 0; cursor: pointer; }
+.document-entry:hover .document-delete, .document-delete:focus-visible { opacity: 1; }
+.document-delete:hover { color: #b34a4a; background: var(--surface); }
+@media (hover: none) { .document-delete { opacity: 1; } }
