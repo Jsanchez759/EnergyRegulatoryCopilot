@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     VECTOR_COLLECTION_NAME: str = "regulatory_documents"
     RAG_CHUNK_SIZE: int = Field(default=900, ge=200, le=4000)
     RAG_CHUNK_OVERLAP: int = Field(default=160, ge=0, le=1000)
+    EMBEDDING_BATCH_SIZE: int = Field(default=32, ge=1, le=256)
+    EMBEDDING_TIMEOUT_SECONDS: float = Field(default=15.0, gt=0, le=120)
+    EMBEDDING_MAX_RETRIES: int = Field(default=4, ge=0, le=10)
     MAX_UPLOAD_BYTES: int = Field(default=25 * 1024 * 1024, ge=1024)
     LOG_LEVEL: str = "INFO"
 

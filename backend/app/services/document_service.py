@@ -21,7 +21,6 @@ from app.schemas.agent import EvidenceSource, IndexedDocument
 from app.services.errors import ProviderUnavailableError
 
 logger = logging.getLogger(__name__)
-EMBEDDING_BATCH_SIZE = 1
 
 
 class DocumentProcessingError(ValueError):
@@ -51,8 +50,9 @@ class DocumentService:
         return AsyncOpenAI(
             base_url=settings.OPENROUTER_BASE_URL,
             api_key=settings.OPENROUTER_API_KEY,
-            timeout=30.0,
-            max_retries=0,
+            # Free-tier providers stall a share of requests; a short timeout plus retries recovers.
+            timeout=settings.EMBEDDING_TIMEOUT_SECONDS,
+            max_retries=settings.EMBEDDING_MAX_RETRIES,
         )
 
     def _require_client(self) -> AsyncOpenAI:
@@ -148,11 +148,11 @@ class DocumentService:
         try:
             client = self._require_client()
             embeddings = []
-            for start in range(0, len(texts), EMBEDDING_BATCH_SIZE):
+            batch_size = settings.EMBEDDING_BATCH_SIZE
+            for start in range(0, len(texts), batch_size):
                 response = await client.embeddings.create(
                     model=settings.OPENROUTER_EMBEDDING_MODEL,
-                    input=texts[start : start + EMBEDDING_BATCH_SIZE],
-                    timeout=30.0,
+                    input=texts[start : start + batch_size],
                 )
                 embeddings.extend(item.embedding for item in response.data)
         except OpenAIError as exc:
