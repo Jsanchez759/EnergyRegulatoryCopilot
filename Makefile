@@ -7,11 +7,11 @@ WEB_HOST ?= 127.0.0.1
 WEB_PORT ?= 5173
 API_BASE_URL ?= http://$(API_HOST):$(API_PORT)/api/v1
 
-.PHONY: help doctor setup sync lock dev backend serve frontend preview lint format format-check build check health
+.PHONY: help doctor setup sync lock dev backend serve frontend preview lint format format-check test e2e up down build check health
 
 help: ## Show available commands
 	@printf '\nEnerCol development commands\n\n'
-	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  make %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  make %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 	@printf '\nOverride hosts or ports, for example: make dev API_PORT=8010 WEB_PORT=5180\n\n'
 
 doctor: ## Check local tools and required environment files
@@ -46,23 +46,35 @@ frontend: ## Start only the Vite frontend
 preview: ## Preview the production frontend build
 	$(NPM) --prefix frontend run preview -- --host $(WEB_HOST) --port $(WEB_PORT)
 
-lint: ## Lint the backend with Ruff
-	$(UV) run --directory backend ruff check app alembic
+lint: ## Lint backend (Ruff) and frontend (ESLint)
+	$(UV) run --directory backend ruff check app alembic tests
+	$(NPM) --prefix frontend run lint
 
 format: ## Format backend Python files
-	$(UV) run --directory backend ruff format app alembic
+	$(UV) run --directory backend ruff format app alembic tests
 
 format-check: ## Check backend formatting without changing files
-	$(UV) run --directory backend ruff format --check app alembic
+	$(UV) run --directory backend ruff format --check app alembic tests
+
+test: ## Run backend and frontend tests
+	$(UV) run --directory backend pytest
+	$(NPM) --prefix frontend test
+
+up: ## Build and start the Docker stack (web :8080, api :8000)
+	docker compose up -d --build
+
+down: ## Stop the Docker stack
+	docker compose down
+
+e2e: ## Run Playwright end-to-end tests against the running stack (make up first)
+	$(NPM) --prefix frontend run e2e
 
 build: ## Build the frontend for production
 	$(NPM) --prefix frontend run build
 
-check: ## Check lockfile, backend lint/format, and frontend production build
+check: ## Lockfile, lint, format, tests, and frontend production build
 	$(UV) lock --directory backend --check
-	$(UV) run --directory backend ruff check app alembic
-	$(UV) run --directory backend ruff format --check app alembic
-	$(UV) run --directory backend python -m compileall -q app alembic
+	$(MAKE) lint format-check test
 	$(PYTHON) -m py_compile scripts/dev.py
 	$(NPM) --prefix frontend run build
 

@@ -16,13 +16,14 @@ import {
 import { consumeSseResponse } from "./features/chat/stream";
 import { useDocuments } from "./features/documents/queries";
 import SourceLibrary from "./features/documents/SourceLibrary";
-import { API_BASE_URL, requestJson } from "./lib/api";
+import { API_BASE_URL } from "./lib/api";
 import Icon from "./shared/Icon";
 import useResizableWidth from "./shared/useResizableWidth";
 
 const THEME_STORAGE_KEY = "enercol_theme_v1";
 const AUTH_SYNC_KEY = "enercol_auth_changed";
 const HISTORY_WIDTH_STORAGE_KEY = "enercol_history_width_v1";
+const NO_MESSAGES = [];
 const STARTERS = [
   "¿Qué establece la regulación sobre autogeneración?",
   "Resume las reglas para conectar un proyecto solar.",
@@ -107,7 +108,7 @@ function AuthenticatedWorkspace({ user }) {
   const conversations = conversationsQuery.data?.conversations || [];
   const allConversations = allConversationsQuery.data?.conversations || [];
   const activeConversation = allConversations.find((item) => item.id === activeConversationId) || allConversations[0];
-  const messages = messagesQuery.data?.messages || [];
+  const messages = messagesQuery.data?.messages ?? NO_MESSAGES;
   const logoutMutation = useMutation({
     mutationFn: authApi.logout,
     onSuccess: () => {
