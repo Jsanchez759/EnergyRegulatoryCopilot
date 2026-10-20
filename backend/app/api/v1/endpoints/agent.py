@@ -1,7 +1,8 @@
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from sqlalchemy import select
 
@@ -14,6 +15,23 @@ from app.services.errors import ProviderUnavailableError
 router = APIRouter(prefix="/agent", tags=["agent"])
 
 
+# Streaming endpoints have already sent a 200 when their body runs, so ownership is checked here.
+async def get_owned_conversation(
+    payload: AgentRequest,
+    db: DbSessionDep,
+    current: CurrentUserDep,
+) -> Conversation:
+    conversation = await db.scalar(
+        select(Conversation).where(
+            Conversation.id == payload.conversation_id,
+            Conversation.user_id == current.user.id,
+        )
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    return conversation
+
+
 @router.post(
     "/stream",
     summary="Research a question with cited document and web sources",
@@ -24,16 +42,8 @@ async def research_stream(
     agent_service: AgentServiceDep,
     db: DbSessionDep,
     current: CurrentUserDep,
+    conversation: Annotated[Conversation, Depends(get_owned_conversation)],
 ) -> AsyncIterator[ServerSentEvent]:
-    conversation = await db.scalar(
-        select(Conversation).where(
-            Conversation.id == payload.conversation_id,
-            Conversation.user_id == current.user.id,
-        )
-    )
-    if conversation is None:
-        raise HTTPException(status_code=404, detail="Conversation not found.")
-
     stored_messages = await db.scalars(
         select(ConversationMessage)
         .where(ConversationMessage.conversation_id == conversation.id)
