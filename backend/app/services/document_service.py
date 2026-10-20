@@ -1,11 +1,8 @@
-import asyncio
 import hashlib
 import io
 import logging
-import time
 
 from asyncer import asyncify
-from openai import AsyncOpenAI, OpenAIError
 from pypdf import PdfReader
 from sqlalchemy import delete, exists, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -13,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.config import settings
 from app.models import Document, DocumentChunk
 from app.schemas.agent import EvidenceSource, IndexedDocument
-from app.services.errors import ProviderUnavailableError
+from app.services.embeddings import EmbeddingClient
 
 logger = logging.getLogger(__name__)
 
@@ -42,23 +39,10 @@ class DocumentService:
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._sessions = session_factory
-        self._llm_client = (
-            AsyncOpenAI(
-                base_url=settings.OPENROUTER_BASE_URL,
-                api_key=settings.OPENROUTER_API_KEY,
-                # Free-tier providers stall a share of requests; a short timeout plus retries
-                # recovers.
-                timeout=settings.EMBEDDING_TIMEOUT_SECONDS,
-                max_retries=settings.EMBEDDING_MAX_RETRIES,
-            )
-            if settings.OPENROUTER_API_KEY
-            else None
-        )
+        self._embeddings = EmbeddingClient()
 
-    def _require_client(self) -> AsyncOpenAI:
-        if self._llm_client is None:
-            raise ProviderUnavailableError("OPENROUTER_API_KEY is not configured on the server.")
-        return self._llm_client
+    def _require_client(self) -> None:
+        self._embeddings.require_available()
 
     async def ingest_pdf(self, file_bytes: bytes, filename: str, user_id: str) -> IndexedDocument:
         self._require_client()
@@ -153,48 +137,10 @@ class DocumentService:
         return result.rowcount > 0
 
     async def _embed_texts(self, texts: list[str]) -> list[list[float]]:
-        client = self._require_client()
-        batch_size = settings.EMBEDDING_BATCH_SIZE
-        batches = [texts[start : start + batch_size] for start in range(0, len(texts), batch_size)]
-        # Provider stalls are per request, so concurrent batches keep one stall from blocking all.
-        semaphore = asyncio.Semaphore(settings.EMBEDDING_CONCURRENCY)
-
-        async def embed_batch(batch: list[str]) -> list[list[float]]:
-            async with semaphore:
-                response = await client.embeddings.create(
-                    model=settings.OPENROUTER_EMBEDDING_MODEL, input=batch
-                )
-            return [item.embedding for item in response.data]
-
-        started = time.perf_counter()
-        try:
-            results = await asyncio.gather(*(embed_batch(batch) for batch in batches))
-        except OpenAIError as exc:
-            logger.warning("embedding provider request failed: %s", type(exc).__name__)
-            raise ProviderUnavailableError(
-                "The embedding provider is not available right now."
-            ) from exc
-        embeddings = [vector for batch in results for vector in batch]
-        logger.info(
-            "embedded texts",
-            extra={
-                "texts": len(texts),
-                "batches": len(batches),
-                "duration_ms": round((time.perf_counter() - started) * 1000, 2),
-            },
-        )
-        if any(len(vector) != settings.EMBEDDING_DIMENSIONS for vector in embeddings):
-            logger.error(
-                "embedding model %s returned vectors that do not match EMBEDDING_DIMENSIONS=%s",
-                settings.OPENROUTER_EMBEDDING_MODEL,
-                settings.EMBEDDING_DIMENSIONS,
-            )
-            raise ProviderUnavailableError("The embedding model is misconfigured on the server.")
-        return embeddings
+        return await self._embeddings.embed(texts)
 
     async def close(self) -> None:
-        if self._llm_client is not None:
-            await self._llm_client.close()
+        await self._embeddings.close()
 
     @staticmethod
     def _extract_pages(file_bytes: bytes) -> tuple[list[dict[str, int | str]], int]:
