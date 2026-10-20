@@ -37,6 +37,7 @@ def _upgrade_schema() -> None:
     backend_root = Path(__file__).resolve().parents[1]
     config = Config(str(backend_root / "alembic.ini"))
     config.set_main_option("script_location", str(backend_root / "alembic"))
+    config.attributes["configure_logger"] = False
     config.set_main_option("sqlalchemy.url", DATABASE_URL.replace("+aiosqlite", "+pysqlite"))
     command.upgrade(config, "head")
 

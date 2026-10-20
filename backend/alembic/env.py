@@ -6,7 +6,8 @@ from alembic import context
 from app.models import Base
 
 config = context.config
-if config.config_file_name is not None:
+# The app configures its own logging; fileConfig would disable its loggers when run in-process.
+if config.config_file_name is not None and config.attributes.get("configure_logger", True):
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
