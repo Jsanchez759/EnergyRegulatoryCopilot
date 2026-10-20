@@ -23,8 +23,8 @@ class Settings(BaseSettings):
     TAVILY_API_KEY: str = Field(default="", repr=False)
 
     AGENT_MAX_ITERATIONS: int = Field(default=4, ge=1, le=8)
-    AGENT_MAX_OUTPUT_TOKENS: int = Field(default=1800, ge=256, le=8192)
-    AGENT_CONTEXT_WINDOW: int = Field(default=8192, ge=1024)
+    AGENT_MAX_OUTPUT_TOKENS: int = Field(default=4096, ge=256, le=8192)
+    AGENT_CONTEXT_WINDOW: int = Field(default=32768, ge=1024)
     AGENT_TIMEOUT_SECONDS: float = Field(default=90.0, gt=0, le=300)
 
     DATABASE_PATH: Path = _BACKEND_ROOT / "storage" / "enercol.db"

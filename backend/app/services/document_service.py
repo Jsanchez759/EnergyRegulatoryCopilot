@@ -92,7 +92,7 @@ class DocumentService:
         return document_id, len(chunks)
 
     async def search(self, query: str, user_id: str, top_k: int = 6) -> list[EvidenceSource]:
-        if await asyncify(self._collection.count)(where={"user_id": user_id}) == 0:
+        if not await self.has_documents(user_id):
             return []
         if self._index is None:
             raise ProviderUnavailableError("OPENROUTER_API_KEY is not configured on the server.")
@@ -114,6 +114,12 @@ class DocumentService:
             )
             for index, node in enumerate(results, start=1)
         ]
+
+    async def has_documents(self, user_id: str) -> bool:
+        result = await asyncify(self._collection.get)(
+            where={"user_id": user_id}, limit=1, include=[]
+        )
+        return bool(result.get("ids"))
 
     async def list_documents(self, user_id: str) -> list[IndexedDocument]:
         result = await asyncify(self._collection.get)(

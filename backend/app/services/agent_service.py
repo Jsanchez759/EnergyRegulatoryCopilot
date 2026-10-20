@@ -36,6 +36,11 @@ Use tools as follows:
 - Say when evidence is missing, conflicting, or not current. Do not present answers as legal advice.
 """
 
+TRUNCATION_NOTICE = (
+    "_La respuesta se interrumpió por el límite de longitud del modelo. "
+    "Pide que continúe o formula una pregunta más específica._"
+)
+
 
 class AgentService:
     """Run a bounded, tool-using research agent and return an auditable event stream."""
@@ -157,7 +162,7 @@ class AgentService:
                         kind="web",
                         title=str(result.get("title") or result.get("url") or "Web source"),
                         url=str(result.get("url") or ""),
-                        snippet=str(result.get("content") or "")[:5000],
+                        snippet=str(result.get("content") or "")[:1500],
                         score=result.get("score"),
                     ),
                 )
@@ -283,6 +288,9 @@ class AgentService:
                 answer = fallback.message.content or ""
             if not answer.strip():
                 raise ProviderUnavailableError("The model returned an empty answer.")
+            if self._finish_reason(result.raw) == "length":
+                logger.warning("agent answer hit the output token limit")
+                answer = f"{answer.rstrip()}\n\n{TRUNCATION_NOTICE}"
             yield {"answer": answer}
             audit = AgentAudit(
                 method=self._audit_method(steps),
@@ -303,6 +311,15 @@ class AgentService:
             client = getattr(self._llm, "_aclient", None)
             if client is not None:
                 await client.close()
+
+    @staticmethod
+    def _finish_reason(raw: object) -> str | None:
+        if not isinstance(raw, dict):
+            return None
+        choices = raw.get("choices") or []
+        if not choices or not isinstance(choices[0], dict):
+            return None
+        return choices[0].get("finish_reason")
 
     @staticmethod
     def _add_source(sources: dict[str, EvidenceSource], source: EvidenceSource) -> EvidenceSource:
