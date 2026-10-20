@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Request, Response, status
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
-from app.api.dependencies import CurrentUserDep, DbSessionDep, DocumentServiceDep
+from app.api.dependencies import CurrentUserDep, DbSessionDep, rate_limit
 from app.core.config import settings
 from app.models import User, UserSession
 from app.schemas.auth import (
@@ -24,6 +24,7 @@ from app.services.auth_service import (
 )
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
+auth_rate_limit = rate_limit("auth", lambda: settings.RATE_LIMIT_AUTH, by="ip")
 
 
 def user_response(user: User) -> UserResponse:
@@ -42,7 +43,7 @@ def set_session_cookie(response: Response, token: str) -> None:
         max_age=settings.SESSION_TTL_DAYS * 24 * 60 * 60,
         httponly=True,
         secure=settings.SESSION_COOKIE_SECURE,
-        samesite="lax",
+        samesite=settings.SESSION_COOKIE_SAMESITE,
         path="/",
     )
 
@@ -52,12 +53,12 @@ def clear_session_cookie(response: Response) -> None:
         settings.SESSION_COOKIE_NAME,
         httponly=True,
         secure=settings.SESSION_COOKIE_SECURE,
-        samesite="lax",
+        samesite=settings.SESSION_COOKIE_SAMESITE,
         path="/",
     )
 
 
-@router.post("/register", status_code=status.HTTP_201_CREATED)
+@router.post("/register", status_code=status.HTTP_201_CREATED, dependencies=[auth_rate_limit])
 async def register(
     payload: RegisterRequest,
     response: Response,
@@ -77,7 +78,7 @@ async def register(
     return user_response(user)
 
 
-@router.post("/login")
+@router.post("/login", dependencies=[auth_rate_limit])
 async def login(
     payload: LoginRequest,
     response: Response,
@@ -144,7 +145,7 @@ async def update_profile(
     return user_response(user)
 
 
-@router.post("/password", status_code=status.HTTP_204_NO_CONTENT)
+@router.post("/password", status_code=status.HTTP_204_NO_CONTENT, dependencies=[auth_rate_limit])
 async def change_password(
     payload: ChangePasswordRequest,
     db: DbSessionDep,
@@ -173,14 +174,12 @@ async def delete_account(
     payload: DeleteAccountRequest,
     db: DbSessionDep,
     current: CurrentUserDep,
-    document_service: DocumentServiceDep,
 ) -> Response:
     if not verify_password(payload.password, current.user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="La contraseña no es correcta.",
         )
-    await document_service.delete_user_documents(current.user.id)
     await db.delete(current.user)
     await db.commit()
     response = Response(status_code=status.HTTP_204_NO_CONTENT)

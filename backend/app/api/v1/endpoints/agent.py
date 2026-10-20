@@ -6,7 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from sqlalchemy import select
 
-from app.api.dependencies import AgentServiceDep, CurrentUserDep, DbSessionDep
+from app.api.dependencies import AgentServiceDep, CurrentUserDep, DbSessionDep, rate_limit
+from app.core.config import settings
 from app.db import SessionFactory
 from app.models import Conversation, ConversationMessage
 from app.schemas.agent import AgentRequest, ChatMessage
@@ -36,6 +37,7 @@ async def get_owned_conversation(
     "/stream",
     summary="Research a question with cited document and web sources",
     response_class=EventSourceResponse,
+    dependencies=[rate_limit("agent", lambda: settings.RATE_LIMIT_AGENT)],
 )
 async def research_stream(
     payload: AgentRequest,

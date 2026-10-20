@@ -1,7 +1,5 @@
 import logging
 import re
-import time
-import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -12,12 +10,23 @@ from fastapi.responses import JSONResponse
 from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.logging_config import setup_logging
-from app.db import engine, initialize_database
+from app.core.observability import init_sentry
+from app.core.request_context import RequestContextMiddleware
+from app.db import SessionFactory, engine
 from app.services.agent_service import AgentService
 from app.services.document_service import DocumentService
 
 setup_logging()
+init_sentry()
 logger = logging.getLogger("app")
+
+
+def is_allowed_origin(origin: str) -> bool:
+    if origin in settings.ALLOWED_ORIGINS:
+        return True
+    return bool(
+        settings.ALLOWED_ORIGIN_REGEX and re.fullmatch(settings.ALLOWED_ORIGIN_REGEX, origin)
+    )
 
 
 def create_application() -> FastAPI:
@@ -25,9 +34,9 @@ def create_application() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
-        await initialize_database()
-        application.state.document_service = DocumentService()
+        application.state.document_service = DocumentService(SessionFactory)
         application.state.agent_service = AgentService(application.state.document_service)
+        logger.info("application started", extra={"version": settings.VERSION})
         try:
             yield
         finally:
@@ -40,73 +49,35 @@ def create_application() -> FastAPI:
         version=settings.VERSION,
         description="Backend API for the Energy Regulatory Copilot project.",
         lifespan=lifespan,
-    )
-
-    # Allow frontend clients to call this backend during development.
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.ALLOWED_ORIGINS,
-        allow_origin_regex=settings.ALLOWED_ORIGIN_REGEX,
-        allow_credentials=True,
-        allow_methods=["GET", "POST", "PATCH", "DELETE"],
-        allow_headers=["Content-Type"],
+        docs_url=None if settings.is_production else "/docs",
+        redoc_url=None,
+        openapi_url=None if settings.is_production else "/openapi.json",
     )
 
     @app.middleware("http")
     async def validate_request_origin(request: Request, call_next):
         if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
             origin = request.headers.get("origin")
-            if (
-                origin
-                and origin not in settings.ALLOWED_ORIGINS
-                and not re.fullmatch(settings.ALLOWED_ORIGIN_REGEX, origin)
-            ):
+            if origin and not is_allowed_origin(origin):
                 return JSONResponse(
                     status_code=403,
                     content={"detail": "El origen de la solicitud no está autorizado."},
                 )
         return await call_next(request)
 
-    @app.middleware("http")
-    async def request_logging_middleware(request: Request, call_next):
-        """Log HTTP request/response metadata with latency and request id."""
-        request_id = str(uuid.uuid4())
-        started = time.perf_counter()
-        path = request.url.path
-        method = request.method
-        client_host = request.client.host if request.client else "unknown"
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.ALLOWED_ORIGINS,
+        allow_origin_regex=settings.ALLOWED_ORIGIN_REGEX,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PATCH", "DELETE"],
+        allow_headers=["Content-Type", "X-Request-ID"],
+        expose_headers=["X-Request-ID", "Retry-After"],
+    )
+    # Added last so it wraps everything and every log line carries the request id.
+    app.add_middleware(RequestContextMiddleware)
 
-        logger.info(
-            "request.start id=%s method=%s path=%s client=%s", request_id, method, path, client_host
-        )
-        try:
-            response = await call_next(request)
-        except Exception:
-            elapsed_ms = (time.perf_counter() - started) * 1000
-            logger.exception(
-                "request.error id=%s method=%s path=%s duration_ms=%.2f",
-                request_id,
-                method,
-                path,
-                elapsed_ms,
-            )
-            raise
-
-        elapsed_ms = (time.perf_counter() - started) * 1000
-        response.headers["X-Request-ID"] = request_id
-        logger.info(
-            "request.end id=%s method=%s path=%s status=%s duration_ms=%.2f",
-            request_id,
-            method,
-            path,
-            response.status_code,
-            elapsed_ms,
-        )
-        return response
-
-    # Mount versioned API routes under a common prefix.
     app.include_router(api_router, prefix=settings.API_V1_PREFIX)
-
     return app
 
 
