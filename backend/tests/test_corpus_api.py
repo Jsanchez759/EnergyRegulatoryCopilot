@@ -120,3 +120,20 @@ def test_amendments_by_norms_outside_the_corpus_still_have_labels(make_user, ind
     detail = user.get(f"/api/v1/corpus/norms/{indexed[RES_174]}").json()
     amendment = next(item for item in detail["amended_by"] if item["to_article"] == "Artículo 1")
     assert amendment["other_norm_label"] == "Resolución CREG 101 99 de 2026"
+
+
+def test_missing_stored_file_is_a_404_not_a_server_error(make_user, indexed) -> None:
+    import os
+
+    from app.core.config import settings
+
+    user = make_user()
+    detail = user.get(f"/api/v1/corpus/norms/{indexed[RES_24]}").json()
+    original = next(item for item in detail["files"] if item["stored"])
+    for root, _, files in os.walk(settings.CORPUS_STORAGE_DIR):
+        for name in files:
+            if name.endswith(".pdf"):
+                os.remove(os.path.join(root, name))
+
+    response = user.get(f"/api/v1/corpus/files/{original['id']}")
+    assert response.status_code == 404

@@ -1,3 +1,4 @@
+import logging
 from typing import Annotated
 from urllib.parse import quote
 
@@ -32,6 +33,7 @@ from app.schemas.corpus import (
     SourceStatus,
 )
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/corpus", tags=["corpus"], dependencies=[Depends(get_current_user)])
 
 
@@ -263,7 +265,15 @@ async def download_file(file_id: str, db: DbSessionDep, storage: StorageDep) -> 
     item = await db.get(NormFile, file_id)
     if item is None or item.storage_key is None:
         raise HTTPException(status_code=404, detail="File not found.")
-    content = await storage.get(item.storage_key)
+    try:
+        content = await storage.get(item.storage_key)
+    except FileNotFoundError:
+        logger.error(
+            "stored corpus file is missing", extra={"file_id": file_id, "key": item.storage_key}
+        )
+        raise HTTPException(
+            status_code=404, detail="El archivo original no está disponible en este momento."
+        ) from None
     return Response(
         content=content,
         media_type=item.content_type or "application/octet-stream",
