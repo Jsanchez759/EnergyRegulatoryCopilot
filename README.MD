@@ -40,6 +40,35 @@ La primera vez que corras e2e: `npx --prefix frontend playwright install chromiu
 CI (`.github/workflows/ci.yml`) ejecuta lint, `alembic check`, pruebas con Postgres, build y las
 imágenes Docker en cada PR.
 
+## Corpus regulatorio
+
+EnerCol mantiene su propio corpus de normativa oficial del sector eléctrico. Hoy cubre las
+resoluciones y los proyectos de resolución de la **CREG desde 2015**, tomados del Gestor
+Normativo. El análisis de fuentes y las próximas a integrar están en
+[docs/spikes/fuentes/](docs/spikes/fuentes/README.md).
+
+- **Qué guarda por norma:** metadatos (número, fechas de expedición y publicación, Diario
+  Oficial), texto consolidado dividido por artículos con búsqueda léxica y semántica, cada versión
+  del texto, el PDF original, las relaciones con otras normas (modifica, adiciona, deroga…)
+  extraídas de las notas de vigencia, y el estado (vigente, derogada o proyecto según la CREG).
+- **Cómo se mantiene al día:** un worker sobre Postgres (`pgqueuer`, sin Redis) revisa los
+  listados cada 3 horas con peticiones condicionales y, cada semana, vuelve a consultar todas las
+  normas conocidas para detectar modificaciones. Cada cambio genera un evento en el feed.
+- **Cortesía con las fuentes:** máximo 1 petición por segundo por sitio, User-Agent identificable,
+  `ETag`/`Last-Modified` y pausas automáticas ante cortes de conexión.
+- **Uso en el agente:** el chat busca primero en el corpus y cita por artículo, indicando si la
+  norma está derogada o es un proyecto.
+
+| Comando | Qué hace |
+| --- | --- |
+| `make worker` | Arranca solo el worker (`make dev` y `make up` ya lo incluyen) |
+| `make backfill` | Encola el rastreo completo desde `CORPUS_START_YEAR` (2015) |
+| `make crawl` | Encola un rastreo incremental inmediato |
+| `uv run --directory backend python -m app.corpus.cli process <URL>` | Indexa una página de la CREG sin la cola, para depurar el parser |
+
+Los PDF originales se guardan en `CORPUS_STORAGE_DIR` (en Docker, el volumen `enercol-corpus`),
+direccionados por su hash para poder moverlos a S3/R2 sin cambiar las claves.
+
 ## Datos
 
 - Cuentas, sesiones, conversaciones, documentos y fragmentos con embeddings viven en Postgres.
@@ -106,6 +135,10 @@ Las opciones se definen en `backend/app/core/config.py` y se sobrescriben desde 
 | `MAX_UPLOAD_BYTES` | `26214400` | Máximo de carga (25 MiB) |
 | `LOG_LEVEL` / `LOG_FORMAT` | `INFO` / según entorno | Nivel y formato (`json` o `console`) |
 | `SENTRY_DSN` / `SENTRY_TRACES_SAMPLE_RATE` | — / `0.0` | Errores y tracing |
+| `CORPUS_STORAGE_DIR` | `backend/storage/corpus` | Archivos originales del corpus |
+| `CORPUS_START_YEAR` | `2015` | Primer año del rastreo completo |
+| `CRAWLER_USER_AGENT` | `EnerColBot/0.1 (+repo)` | Identificación ante las fuentes |
+| `OCR_LANGUAGE` / `OCR_MIN_CHARS_PER_PAGE` | `spa` / `200` | OCR con Tesseract para PDF escaneados |
 
 ## Frontend
 
@@ -127,13 +160,18 @@ frontend a `ALLOWED_ORIGINS`.
   `DELETE /api/v1/conversations/{id}`
 - `POST /api/v1/agent/stream`: investigación con actividad, respuesta y auditoría por SSE
 - `GET|POST /api/v1/sources`, `DELETE /api/v1/sources/{id}`: biblioteca de PDFs
+- `GET /api/v1/corpus/norms` (filtros `q`, `doc_type`, `status`, `year`) y
+  `GET /api/v1/corpus/norms/{id}`: normas con artículos, archivos y relaciones
+- `GET /api/v1/corpus/search?q=`: búsqueda híbrida por artículo
+- `GET /api/v1/corpus/events`: feed de cambios; `GET /api/v1/corpus/status`: salud por fuente
+- `GET /api/v1/corpus/files/{id}`: PDF original
 
 Las respuestas 429 incluyen `Retry-After`.
 
 ## Limitaciones conocidas
 
-- La ingesta de PDFs es síncrona dentro del request; un worker en segundo plano llegará con la feature
-  de scraping e ingesta del corpus regulatorio.
+- La ingesta de los PDF que suben los usuarios sigue siendo síncrona dentro del request.
+- El corpus aún no incluye circulares ni autos de la CREG, ni MinEnergía, UPME, CNO o SUIN.
 - Los modelos por defecto son los más baratos que respondieron con fuentes y citas en todas las
   preguntas de prueba (unos 0,0003 USD por consulta). Los modelos gratuitos de OpenRouter no sirven:
   bloquean llamadas al azar y limitan a 20 solicitudes por minuto.
@@ -147,7 +185,8 @@ backend/
     api/              Rutas y dependencias FastAPI (auth, rate limiting)
     core/             Configuración, logging, request id, Sentry, rate limiting
     schemas/          Modelos de request y respuesta
-    services/         Agente, documentos/pgvector, autenticación
+    services/         Agente, documentos/pgvector, corpus, autenticación
+    corpus/           Worker, crawler por fuente, pipeline de indexación
   alembic/            Migraciones
   tests/              Pruebas pytest (Postgres real)
   Dockerfile

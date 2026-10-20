@@ -17,3 +17,5 @@ For FastAPI work, consult `.agents/skills/fastapi/SKILL.md` when it is available
 - Preserve document provenance (source ID, filename, page, and SHA-256) through retrieval and response serialization.
 - Use LlamaIndex tools and retrieval abstractions where they reduce project code; keep orchestration decisions explicit and inspectable.
 - Keep Ruff's FastAPI rules enabled. Run `make check` after backend changes.
+- Each regulatory source lives in `app/corpus/sources/<source>.py` with pure parsing functions tested against gzipped real pages in `tests/fixtures/<source>/`. Crawl through `PoliteFetcher` only; never bypass its per-host pacing.
+- Norms are identified by a stable key (`<source>:<doc_type>:<number>:<year>`), not by URL. Never claim vigencia without naming the source that states it.
