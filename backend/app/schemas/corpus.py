@@ -17,6 +17,8 @@ class NormSummary(BaseModel):
     published_on: date | None
     url: str
     last_changed_at: datetime | None
+    comment_start: date | None
+    comment_end: date | None
 
 
 class NormListResponse(BaseModel):

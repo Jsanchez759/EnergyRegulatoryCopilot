@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 
 import { useCorpusSearch, useNorms, useSourceCatalog } from "./api";
 import { allDocTypes, formatDate, sourceName, STATUS } from "./labels";
+import Deadline from "./Deadline";
 import StatusBadge from "./StatusBadge";
 import Icon from "../../shared/Icon";
 
@@ -36,7 +37,10 @@ function NormList({ filters, page, onPage, catalog }) {
           </div>
           <Link className="feed-item-title" to={`/normativa/${norm.id}`}>{norm.label}</Link>
           {norm.title && <p className="feed-item-summary">{norm.title}</p>}
-          <StatusBadge status={norm.status} />
+          <div className="feed-item-footer">
+            <StatusBadge status={norm.status} />
+            <Deadline norm={norm} />
+          </div>
         </li>)}
       </ul> : <p className="monitor-empty">No hay normas con estos filtros.</p>}
       {pages > 1 && <nav className="pagination" aria-label="Paginación">
@@ -81,6 +85,7 @@ export default function NormsPage() {
     doc_type: params.get("doc_type") || "",
     status: params.get("status") || "",
     year: params.get("year") || "",
+    open_consultation: params.get("open") === "1" || "",
   };
   const page = Number(params.get("page") || 0);
   const currentYear = new Date().getFullYear();
@@ -146,6 +151,12 @@ export default function NormsPage() {
             <option value="">Todos los años</option>
             {years.map((year) => <option key={year} value={year}>{year}</option>)}
           </select>
+          <button
+            type="button"
+            className={`chip ${filters.open_consultation ? "is-active" : ""}`}
+            aria-pressed={Boolean(filters.open_consultation)}
+            onClick={() => update({ open: filters.open_consultation ? "" : "1", page: "" })}
+          >Consultas abiertas</button>
         </div>}
       </div>
       {mode === "texto"

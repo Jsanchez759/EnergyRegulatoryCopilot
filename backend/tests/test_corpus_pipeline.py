@@ -81,7 +81,7 @@ def harness(client, tmp_path):
 
 def test_backfill_queues_each_listed_norm_once(harness) -> None:
     h = harness({listing_url(GENERAL_2015): fixture(GENERAL_2015)})
-    run = h.run(h.pipeline.discover_creg(years=[2015], mode="backfill"))
+    run = h.run(h.pipeline.discover("creg", years=[2015], mode="backfill"))
 
     assert run.status == "succeeded"
     assert run.items_seen == 37
@@ -91,16 +91,16 @@ def test_backfill_queues_each_listed_norm_once(harness) -> None:
     assert h.scalar(select(func.count()).where(Norm.status == "derogada")) == 9
 
     h.queued.clear()
-    h.run(h.pipeline.discover_creg(years=[2015], mode="backfill"))
+    h.run(h.pipeline.discover("creg", years=[2015], mode="backfill"))
     assert len(h.queued) == 37, "unprocessed norms are queued again on the next backfill"
 
 
 def test_incremental_crawl_skips_unchanged_listings(harness) -> None:
     h = harness({listing_url(GENERAL_2015): fixture(GENERAL_2015)})
-    h.run(h.pipeline.discover_creg(years=[2015], mode="incremental"))
+    h.run(h.pipeline.discover("creg", years=[2015], mode="incremental"))
     h.queued.clear()
 
-    run = h.run(h.pipeline.discover_creg(years=[2015], mode="incremental"))
+    run = h.run(h.pipeline.discover("creg", years=[2015], mode="incremental"))
     assert run.pages_unchanged == 1
     assert h.queued == []
 
@@ -175,18 +175,12 @@ def test_listing_derogation_requeues_and_changes_status(harness) -> None:
     ) == {"from": "vigente", "to": "derogada"}
 
 
-def _listing_item(url, derogated=False):
+def _listing_item(url, derogated=False, draft=False):
     from app.corpus.sources import creg
 
     match = creg.DOC_HREF.search(url)
-    return creg.ListingItem(
-        url=url,
-        number=creg.normalize_number(match["number"]),
-        year=int(match["year"]),
-        label="",
-        title="",
-        derogated=derogated,
-        is_draft=False,
+    return creg.listing_item(
+        url, match["number"], int(match["year"]), derogated=derogated, draft=draft
     )
 
 
@@ -199,7 +193,7 @@ def test_new_discovery_closes_interrupted_runs(harness) -> None:
             await db.commit()
 
     h.run(interrupted())
-    h.run(h.pipeline.discover_creg(years=[2015], mode="backfill"))
+    h.run(h.pipeline.discover("creg", years=[2015], mode="backfill"))
     statuses = h.scalar(select(func.array_agg(CrawlRun.status)).where(CrawlRun.source == "creg"))
     assert sorted(statuses) == ["abandoned", "succeeded"]
 
@@ -221,9 +215,7 @@ def test_draft_listing_reclassifies_an_existing_norm_instead_of_duplicating(harn
     norm_id = h.run(h.pipeline._upsert_from_listing(_listing_item(url)))
     h.run(h.pipeline.process_norm(norm_id))
 
-    draft = _listing_item(url)
-    draft = draft.__class__(**{**draft.__dict__, "is_draft": True})
-    assert h.run(h.pipeline._upsert_from_listing(draft)) == norm_id
+    assert h.run(h.pipeline._upsert_from_listing(_listing_item(url, draft=True))) == norm_id
     assert h.scalar(select(func.count()).select_from(Norm)) == 1
 
     h.fetcher.replace(url, fixture(RES_174) + b"<!-- reclassified -->")
@@ -316,8 +308,7 @@ def test_reclassifying_a_resolution_as_draft_is_not_a_status_event(harness) -> N
     norm_id = h.run(h.pipeline._upsert_from_listing(_listing_item(url)))
     h.run(h.pipeline.process_norm(norm_id))
 
-    draft = _listing_item(url)
-    h.run(h.pipeline._upsert_from_listing(draft.__class__(**{**draft.__dict__, "is_draft": True})))
+    h.run(h.pipeline._upsert_from_listing(_listing_item(url, draft=True)))
     assert h.run(h.pipeline.process_norm(norm_id)) == "not_modified"
 
     assert h.scalar(select(Norm.status).where(Norm.id == norm_id)) == "proyecto"

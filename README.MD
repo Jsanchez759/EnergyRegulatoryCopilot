@@ -42,29 +42,40 @@ imágenes Docker en cada PR.
 
 ## Corpus regulatorio
 
-EnerCol mantiene su propio corpus de normativa oficial del sector eléctrico. Hoy cubre las
-resoluciones y los proyectos de resolución de la **CREG desde 2015**, tomados del Gestor
-Normativo. El análisis de fuentes y las próximas a integrar están en
+EnerCol mantiene su propio corpus de normativa oficial del sector eléctrico desde 2015:
+
+- **CREG:** resoluciones y proyectos de resolución del Gestor Normativo.
+- **MinEnergía:** resoluciones, decretos y leyes del normograma (sector Energía, y del General y
+  Regulatorio solo lo eléctrico), y los proyectos publicados para comentarios con sus fechas de
+  apertura y cierre. Los decretos y leyes usan una clave nacional (`co:decreto:1073:2015`), así que
+  se enlazan con las referencias que hacen otras fuentes.
+
+El análisis de fuentes y las próximas a integrar están en
 [docs/spikes/fuentes/](docs/spikes/fuentes/README.md).
 
 - **Qué guarda por norma:** metadatos (número, fechas de expedición y publicación, Diario
-  Oficial), texto consolidado dividido por artículos con búsqueda léxica y semántica, cada versión
-  del texto, el PDF original, las relaciones con otras normas (modifica, adiciona, deroga…)
-  extraídas de las notas de vigencia, y el estado (vigente, derogada o proyecto según la CREG).
+  Oficial, plazo de comentarios), texto dividido por artículos con búsqueda léxica y semántica
+  (del HTML consolidado, o del PDF/DOCX original con OCR si está escaneado), cada versión del
+  texto, el archivo original, las relaciones con otras normas (modifica, adiciona, deroga…) y el
+  estado (vigente, derogada o proyecto según la fuente). Las relaciones salen de las notas de
+  vigencia de la CREG y de los títulos de MinEnergía ("Por la cual se modifica la Resolución…").
 - **Cómo se mantiene al día:** un worker sobre Postgres (`pgqueuer`, sin Redis) revisa los
-  listados cada 3 horas con peticiones condicionales y, cada semana, vuelve a consultar todas las
-  normas conocidas para detectar modificaciones. Cada cambio genera un evento en el feed.
-- **Cortesía con las fuentes:** máximo 1 petición por segundo por sitio, User-Agent identificable,
-  `ETag`/`Last-Modified` y pausas automáticas ante cortes de conexión.
+  listados de la CREG cada 3 horas y los de MinEnergía cada 6 (los últimos 120 días del normograma,
+  porque publica con retraso, y los foros más recientes). Cada semana vuelve a consultar todas las
+  normas conocidas de cada fuente para detectar modificaciones y derogatorias. Cada cambio genera
+  un evento en el feed.
+- **Cortesía con las fuentes:** una petición por segundo en la CREG y una cada 4 segundos en
+  MinEnergía (su firewall corta conexiones ante ráfagas), User-Agent identificable,
+  `ETag`/`Last-Modified` donde existen y pausas automáticas ante cortes de conexión.
 - **Uso en el agente:** el chat busca primero en el corpus y cita por artículo, indicando si la
   norma está derogada o es un proyecto.
 
 | Comando | Qué hace |
 | --- | --- |
 | `make worker` | Arranca solo el worker (`make dev` y `make up` ya lo incluyen) |
-| `make backfill` | Encola el rastreo completo desde `CORPUS_START_YEAR` (2015) |
-| `make crawl` | Encola un rastreo incremental inmediato |
-| `uv run --directory backend python -m app.corpus.cli process <URL>` | Indexa una página de la CREG sin la cola, para depurar el parser |
+| `make backfill` | Encola el rastreo completo desde `CORPUS_START_YEAR` (2015); `SOURCE=minenergia` limita a una fuente |
+| `make crawl` | Encola un rastreo incremental inmediato; también acepta `SOURCE=` |
+| `uv run --directory backend python -m app.corpus.cli process <URL>` | Indexa una página sin la cola, para depurar el parser (de la CREG, o de otra fuente si ya fue descubierta) |
 
 Los PDF originales y las páginas descargadas se guardan en `CORPUS_STORAGE_DIR`
 (`backend/storage/corpus`), direccionados por su hash para poder moverlos a S3/R2 sin cambiar las
@@ -72,8 +83,13 @@ claves. `make dev` y `make up` comparten la misma base, la misma cola y ese mism
 que sus workers pueden correr a la vez. Tras cambiar el código del worker reinicia `make dev`: la API
 se recarga sola, el worker no.
 
-Si mejoras un parser, `python -m app.corpus.cli reparse` vuelve a procesar todas las normas desde
-las páginas guardadas, sin pedir nada a las fuentes ni generar eventos en el feed.
+Si mejoras un parser, `python -m app.corpus.cli reparse [--source creg]` vuelve a procesar las
+normas desde las páginas guardadas, sin pedir nada a las fuentes ni generar eventos en el feed.
+
+Para agregar una fuente: implementa el protocolo `Source` de `app/corpus/sources/base.py`
+(`discover` recorre los listados y `parse` lee la página de una norma), regístrala en
+`app/corpus/sources/registry.py` y añade su entrada en `app/corpus/catalog.py`. El pipeline, el
+worker (con sus horarios), el CLI, la API y la interfaz la toman sin más cambios.
 
 ## Datos
 
@@ -166,18 +182,23 @@ frontend a `ALLOWED_ORIGINS`.
   `DELETE /api/v1/conversations/{id}`
 - `POST /api/v1/agent/stream`: investigación con actividad, respuesta y auditoría por SSE
 - `GET|POST /api/v1/sources`, `DELETE /api/v1/sources/{id}`: biblioteca de PDFs
-- `GET /api/v1/corpus/norms` (filtros `q`, `doc_type`, `status`, `year`) y
+- `GET /api/v1/corpus/norms` (filtros `q`, `source`, `doc_type`, `status`, `year`,
+  `open_consultation`) y
   `GET /api/v1/corpus/norms/{id}`: normas con artículos, archivos y relaciones
 - `GET /api/v1/corpus/search?q=`: búsqueda híbrida por artículo
 - `GET /api/v1/corpus/events`: feed de cambios; `GET /api/v1/corpus/status`: salud por fuente
-- `GET /api/v1/corpus/files/{id}`: PDF original
+- `GET /api/v1/corpus/files/{id}`: archivo original (PDF o DOCX)
 
 Las respuestas 429 incluyen `Retry-After`.
 
 ## Limitaciones conocidas
 
 - La ingesta de los PDF que suben los usuarios sigue siendo síncrona dentro del request.
-- El corpus aún no incluye circulares ni autos de la CREG, ni MinEnergía, UPME, CNO o SUIN.
+- El corpus aún no incluye circulares ni autos de la CREG, ni UPME, CNO o SUIN.
+- La CREG no publica el plazo de comentarios como dato: está en el texto del proyecto y todavía no
+  se extrae. MinEnergía sí lo publica y se muestra.
+- El normograma de MinEnergía no indica qué norma deroga a otra, solo el estado; las relaciones
+  de MinEnergía salen de los títulos y no cubren modificaciones mencionadas solo en el articulado.
 - Los modelos por defecto son los más baratos que respondieron con fuentes y citas en todas las
   preguntas de prueba (unos 0,0003 USD por consulta). Los modelos gratuitos de OpenRouter no sirven:
   bloquean llamadas al azar y limitan a 20 solicitudes por minuto.

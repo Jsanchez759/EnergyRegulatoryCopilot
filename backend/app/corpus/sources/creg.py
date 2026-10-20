@@ -4,15 +4,33 @@ See docs/spikes/fuentes/creg.md for the site structure this adapter relies on.
 """
 
 import re
-import unicodedata
-from dataclasses import dataclass, field
+from collections.abc import AsyncIterator
 from datetime import date
 from urllib.parse import unquote, urljoin
 
 from bs4 import BeautifulSoup
 
-from app.corpus.catalog import norm_label
-from app.corpus.text import decode_html, normalize_whitespace
+from app.corpus.sources.base import (
+    MONTHS,
+    ListingItem,
+    NormRef,
+    ParsedFile,
+    ParsedNorm,
+    ParsedRelation,
+    Reader,
+    clean,
+    digits_number,
+    fold,
+    is_draft,
+    spanish_date,
+)
+from app.corpus.text import (
+    PREAMBLE,
+    decode_html,
+    normalize_whitespace,
+    section_passages,
+    split_sections,
+)
 
 SOURCE = "creg"
 BASE_URL = "https://gestornormativo.creg.gov.co/gestor/entorno/"
@@ -34,34 +52,8 @@ SECTOR_PREFIX_YEAR = 2022
 # 101/501/701: electricity general, particular and draft; 105/705: cross-sector.
 ELECTRICITY_PREFIXES = {"101", "501", "701", "105", "505", "705"}
 
-MONTHS = {
-    month: index
-    for index, month in enumerate(
-        (
-            "enero",
-            "febrero",
-            "marzo",
-            "abril",
-            "mayo",
-            "junio",
-            "julio",
-            "agosto",
-            "septiembre",
-            "octubre",
-            "noviembre",
-            "diciembre",
-        ),
-        start=1,
-    )
-}
-MONTHS["setiembre"] = 9
 
 DOC_HREF = re.compile(r"docs/(?P<slug>[a-z_]+?)_creg_(?P<number>[0-9a-z\-]+)_(?P<year>\d{4})\.htm$")
-ARTICLE_START = re.compile(
-    r"^(?P<label>ART[ÍI]CULO\s+(?:\d+[A-Za-z]?(?:\s*(?:o|º|°)\b)?|[ÚU]NICO)"
-    r"(?:\s+(?:BIS|TRANSITORIO))?)\.?\s*(?P<rest>.*)$"
-)
-ANNEX_START = re.compile(r"^(?P<label>ANEXO(?:\s+[\dIVXLC]+)?)\b\.?\s*(?P<rest>.*)$")
 NOTE = re.compile(r"<([^<>]{5,800})>")
 AMENDMENT = re.compile(
     r"(?P<subject>Art[ií]culo|Par[áa]grafo|Numeral|Literal|Inciso|Resoluci[óo]n|Cap[ií]tulo|"
@@ -86,58 +78,6 @@ RELATION_BY_VERB = {
     "reglamentad": "reglamenta",
     "prorrogad": "prorroga",
 }
-
-
-@dataclass(frozen=True)
-class ListingItem:
-    url: str
-    number: str
-    year: int
-    label: str
-    title: str
-    derogated: bool
-    is_draft: bool
-
-    @property
-    def doc_type(self) -> str:
-        return "proyecto_resolucion" if self.is_draft else "resolucion"
-
-
-@dataclass
-class ParsedRelation:
-    from_key: str
-    relation: str
-    from_article: str
-    to_article: str
-    evidence: str
-
-
-@dataclass
-class ParsedFile:
-    url: str
-    label: str
-    kind: str
-
-
-@dataclass
-class ParsedNorm:
-    key: str
-    doc_type: str
-    number: str
-    year: int
-    title: str
-    issued_on: date | None
-    published_on: date | None
-    diario_oficial: str | None
-    derogated: bool
-    text: str
-    passages: list[tuple[str, str]]
-    relations: list[ParsedRelation] = field(default_factory=list)
-    files: list[ParsedFile] = field(default_factory=list)
-
-    @property
-    def label(self) -> str:
-        return norm_label(SOURCE, self.doc_type, self.number, self.year)
 
 
 def listing_urls(year: int) -> list[str]:
@@ -182,43 +122,55 @@ def parse_listing(content: bytes, page_url: str) -> list[ListingItem]:
         if url in seen:
             continue
         seen.add(url)
-        label_node = anchor.select_one(".id-documento")
         title_node = anchor.select_one(".descripcion-documento")
-        title = _clean(title_node.get_text(" ")) if title_node else ""
+        title = clean(title_node.get_text(" ")) if title_node else ""
         derogated = title.lower().startswith("derogad")
         # Before 2022 drafts were numbered as resolutions and only a "Proyecto" tag tells them
         # apart; since then the 7xx prefix does, and draft listings also carry final acts.
         if year >= SECTOR_PREFIX_YEAR:
-            is_draft = normalize_number(number).startswith("7")
+            draft = normalize_number(number).startswith("7")
         else:
-            is_draft = draft_listing or bool(title_node and title_node.select_one(".proyecto"))
+            draft = draft_listing or bool(title_node and title_node.select_one(".proyecto"))
         title = re.sub(r"^proyecto\s+", "", title, flags=re.I)
         items.append(
-            ListingItem(
-                url=url,
-                number=normalize_number(number),
-                year=year,
-                label=_clean(label_node.get_text(" ")) if label_node else "",
+            listing_item(
+                url,
+                number,
+                year,
                 title=re.sub(r"^derogad[oa]\.?\s*[-:]?\s*", "", title, flags=re.I),
                 derogated=derogated,
-                is_draft=is_draft,
+                draft=draft,
             )
         )
     return items
 
 
+def listing_item(
+    url: str, number: str, year: int, title: str = "", derogated: bool = False, draft: bool = False
+) -> ListingItem:
+    doc_type = "proyecto_resolucion" if draft else "resolucion"
+    return ListingItem(
+        source=SOURCE,
+        url=url,
+        key=norm_key(doc_type, number, year),
+        doc_type=doc_type,
+        number=normalize_number(number),
+        year=year,
+        title=title,
+        derogated=derogated,
+    )
+
+
 def parse_document(content: bytes, url: str, chunk_chars: int, draft: bool = False) -> ParsedNorm:
     """Parse a document page; `draft` carries the listing's classification for pre-2022 drafts,
     whose pages are headed as ordinary resolutions."""
-    from app.corpus.text import split_passages
-
     soup = BeautifulSoup(decode_html(content), "lxml")
     panel = soup.select_one("div.panel-documento") or soup.body or soup
     # Hidden boxes hold superseded wording and editorial notes, not the current text.
     for hidden in panel.select('[class^="caja_vja"], [class*=" caja_vja"]'):
         hidden.decompose()
     lines = [
-        _clean(node.get_text(" "))
+        clean(node.get_text(" "))
         for node in panel.find_all(["p", "li", "h1", "h2", "h3", "h4", "td"])
         if not node.find_parent(["p", "li", "td"])
     ]
@@ -230,63 +182,38 @@ def parse_document(content: bytes, url: str, chunk_chars: int, draft: bool = Fal
         raise ValueError(f"Unrecognized CREG document URL: {url}")
     number, year = normalize_number(match["number"]), int(match["year"])
     header = "\n".join(lines[:12])
-    is_draft = draft or bool(re.match(r"PROYECTO DE RESOLUCI", header))
-    doc_type = "proyecto_resolucion" if is_draft else "resolucion"
+    draft = draft or bool(re.match(r"PROYECTO DE RESOLUCI", header))
+    doc_type = "proyecto_resolucion" if draft else "resolucion"
     key = norm_key(doc_type, number, year)
 
-    sections = _split_sections(lines)
     passages: list[tuple[str, str]] = []
     relations: list[ParsedRelation] = []
-    for label, body in sections:
-        parts = split_passages(body, chunk_chars)
-        for index, part in enumerate(parts, start=1):
-            passages.append((label if len(parts) == 1 else f"{label} (parte {index})", part))
+    for label, body in split_sections(lines):
+        passages.extend(section_passages(label, body, chunk_chars))
         to_article = "" if label == PREAMBLE else label
         relations.extend(_relations(body, to_article))
 
     derogated = any(
         relation.relation == "deroga" and relation.to_article == "" for relation in relations
     )
+    files = _files(soup, url)
     return ParsedNorm(
+        source=SOURCE,
         key=key,
         doc_type=doc_type,
         number=number,
         year=year,
         title=_title(lines),
         issued_on=_issued_on(header, year),
-        published_on=_spanish_date(
-            re.search(r"Publicad[oa] en la p[áa]gina web de la CREG:\s*([^>\n]+)", header)
-        ),
+        published_on=_published_on(header),
         diario_oficial=_diario_oficial(header),
         derogated=derogated,
         text=text,
         passages=passages,
         relations=_dedupe(relations),
-        files=_files(soup, url),
+        files=files,
+        primary=primary_pdf(files, number),
     )
-
-
-PREAMBLE = "Encabezado y considerandos"
-
-
-def _split_sections(lines: list[str]) -> list[tuple[str, str]]:
-    sections: list[tuple[str, list[str]]] = [(PREAMBLE, [])]
-    for line in lines:
-        article = ARTICLE_START.match(line)
-        annex = ANNEX_START.match(line) if not article else None
-        if article:
-            sections.append((_article_label(article["label"]), [line]))
-        elif annex and len(line) < 200:
-            sections.append((annex["label"].title(), [line]))
-        else:
-            sections[-1][1].append(line)
-    return [(label, "\n".join(body)) for label, body in sections if body]
-
-
-def _article_label(raw: str) -> str:
-    label = re.sub(r"\s+", " ", raw).strip()
-    label = re.sub(r"(\d+)\s*(?:o|º|°)\b", r"\1", label)
-    return label.capitalize().replace("Unico", "Único")
 
 
 def _relations(body: str, to_article: str) -> list[ParsedRelation]:
@@ -295,8 +222,8 @@ def _relations(body: str, to_article: str) -> list[ParsedRelation]:
         match = AMENDMENT.search(note)
         if not match:
             continue
-        subject = _fold(match["subject"])
-        relation = RELATION_BY_VERB[_fold(match["verb"])]
+        subject = fold(match["subject"])
+        relation = RELATION_BY_VERB[fold(match["verb"])]
         target_article = "" if subject == "resolucion" else to_article
         relations.append(
             ParsedRelation(
@@ -313,16 +240,16 @@ def _relations(body: str, to_article: str) -> list[ParsedRelation]:
 
 
 def _referenced_key(doc: str, number: str, year: int, context: str) -> str:
-    kind = _fold(doc)
+    kind = fold(doc)
     if kind == "resolucion":
-        lowered = _fold(context)
+        lowered = fold(context)
         if "ministerio" in lowered or "mme" in lowered.split() or "upme" in lowered:
             entity = "upme" if "upme" in lowered else "minenergia"
-            return f"{entity}:resolucion:{normalize_number(number)}:{year}"
+            return f"{entity}:resolucion:{digits_number(number)}:{year}"
         return norm_key("resolucion", number, year)
     if kind == "circular":
         return f"{SOURCE}:circular:{normalize_number(number)}:{year}"
-    return f"co:{kind}:{normalize_number(number)}:{year}"
+    return f"co:{kind}:{digits_number(number)}:{year}"
 
 
 def _dedupe(relations: list[ParsedRelation]) -> list[ParsedRelation]:
@@ -355,13 +282,13 @@ def primary_pdf(files: list[ParsedFile], number: str) -> ParsedFile | None:
     pdfs = [item for item in files if item.kind == "pdf"]
     compact = re.sub(r"\D", "", number)
     for item in pdfs:
-        name = _fold(item.label)
+        name = fold(item.label)
         if name.startswith(("documento_creg", "d-", "anexo")):
             continue
         if compact and compact.lstrip("0") in re.sub(r"\D", "", name):
             return item
     return next(
-        (item for item in pdfs if not _fold(item.label).startswith(("documento_creg", "d-"))),
+        (item for item in pdfs if not fold(item.label).startswith(("documento_creg", "d-"))),
         None,
     )
 
@@ -375,24 +302,17 @@ def _title(lines: list[str]) -> str:
 
 def _issued_on(header: str, year: int) -> date | None:
     match = re.search(r"\((\w+)\s+(\d{1,2})\s*(?:o|º|°)?\)", header)
-    if not match or _fold(match[1]) not in MONTHS:
+    if not match or fold(match[1]) not in MONTHS:
         return None
     try:
-        return date(year, MONTHS[_fold(match[1])], int(match[2]))
+        return date(year, MONTHS[fold(match[1])], int(match[2]))
     except ValueError:
         return None
 
 
-def _spanish_date(match: re.Match[str] | None) -> date | None:
-    if not match:
-        return None
-    found = re.search(r"(\d{1,2})\s+de\s+(\w+)\s+de\s+(\d{4})", match[1])
-    if not found or _fold(found[2]) not in MONTHS:
-        return None
-    try:
-        return date(int(found[3]), MONTHS[_fold(found[2])], int(found[1]))
-    except ValueError:
-        return None
+def _published_on(header: str) -> date | None:
+    match = re.search(r"Publicad[oa] en la p[áa]gina web de la CREG:\s*([^>\n]+)", header)
+    return spanish_date(match[1]) if match else None
 
 
 def _diario_oficial(header: str) -> str | None:
@@ -400,10 +320,25 @@ def _diario_oficial(header: str) -> str | None:
     return f"{match[1]} de {match[2]}" if match else None
 
 
-def _clean(value: str) -> str:
-    return re.sub(r"\s+", " ", value).strip()
+class CregSource:
+    id = SOURCE
+    min_interval_by_host = {HOST: MIN_INTERVAL_SECONDS}
+    incremental_cron = "0 */3 * * *"
+    # Amendments rewrite existing pages; conditional requests make this weekly pass cheap.
+    recheck_cron = "30 4 * * 0"
+
+    async def discover(
+        self, read: Reader, years: list[int], mode: str
+    ) -> AsyncIterator[ListingItem]:
+        for year in years:
+            for url in listing_urls(year):
+                content = await read(url, mode == "incremental")
+                if content is not None:
+                    for item in parse_listing(content, url):
+                        yield item
+
+    def parse(self, content: bytes, norm: NormRef, chunk_chars: int) -> ParsedNorm:
+        return parse_document(content, norm.url, chunk_chars, draft=is_draft(norm.doc_type))
 
 
-def _fold(value: str) -> str:
-    folded = unicodedata.normalize("NFKD", value.lower())
-    return "".join(char for char in folded if not unicodedata.combining(char))
+ADAPTER = CregSource()

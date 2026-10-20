@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { fileUrl, useNorm, useSourceCatalog } from "./api";
 import {
+  consultation,
   docTypeLabel,
   EVENT_KINDS,
   formatDate,
@@ -89,6 +90,7 @@ export default function NormPage() {
 
   const original = data.files.find((file) => file.kind === "original" && file.stored);
   const wholeNormChanges = amendmentsByArticle.get("") || [];
+  const comments = consultation(data);
 
   return (
     <article className="norm-page">
@@ -101,16 +103,22 @@ export default function NormPage() {
           <div><dt>Estado</dt><dd><StatusBadge status={data.status} /></dd></div>
           {data.issued_on && <div><dt>Expedida</dt><dd>{formatDate(data.issued_on)}</dd></div>}
           {data.published_on && <div><dt>Publicada</dt><dd>{formatDate(data.published_on)}</dd></div>}
+          {comments && <div><dt>Comentarios</dt><dd>{formatDate(data.comment_start)} – {formatDate(data.comment_end)}</dd></div>}
           {data.diario_oficial && <div><dt>Diario Oficial</dt><dd>No. {data.diario_oficial}</dd></div>}
           {data.last_changed_at && <div><dt>Última actualización</dt><dd>{formatDateTime(data.last_changed_at)}</dd></div>}
         </dl>
         <div className="norm-actions">
           <button type="button" className="primary-action" onClick={() => navigate("/", { state: { draft: `Explícame en detalle la ${data.label}: qué establece, a quién aplica y qué obligaciones crea.` } })}>Preguntar al asistente</button>
           <a href={data.url} target="_blank" rel="noreferrer">Ver en la fuente oficial</a>
-          {original && <a href={fileUrl(original.id)} target="_blank" rel="noreferrer">PDF original</a>}
+          {original && <a href={fileUrl(original.id)} target="_blank" rel="noreferrer">Documento original</a>}
         </div>
         {data.status === "derogada" && <p className="norm-notice is-derogada">{STATUS.derogada.hint}. Consulta las normas que la reemplazan antes de aplicarla.</p>}
-        {data.status === "proyecto" && <p className="norm-notice is-proyecto">Proyecto publicado para comentarios: no es una norma vigente. El plazo de comentarios está en su encabezado.</p>}
+        {data.status === "proyecto" && <p className="norm-notice is-proyecto">
+          Proyecto publicado para comentarios: no es una norma vigente.{" "}
+          {comments
+            ? comments.open ? `Recibe comentarios hasta el ${formatDate(data.comment_end)}.` : `La consulta cerró el ${formatDate(data.comment_end)}.`
+            : "El plazo de comentarios está en su encabezado."}
+        </p>}
         {wholeNormChanges.length > 0 && <p className="norm-notice">{wholeNormChanges.map((item) => `${item.other_norm_label} ${relationVerb(item.relation)} esta norma`).join(" · ")}</p>}
       </header>
 

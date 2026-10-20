@@ -19,13 +19,26 @@ def listing_url(name: str) -> str:
     return f"{creg.BASE_URL}{name}"
 
 
-class FakeFetcher:
-    """Serves fixture pages by URL and answers conditional requests like the CREG's IIS."""
+def minenergia_fixture(name: str) -> bytes:
+    path = FIXTURES.parent / "minenergia" / name
+    return (
+        gzip.decompress(path.with_name(f"{name}.gz").read_bytes())
+        if not path.exists()
+        else (path.read_bytes())
+    )
 
-    def __init__(self, pages: dict[str, bytes]) -> None:
+
+class FakeFetcher:
+    """Serves fixture pages by URL and answers conditional requests like the CREG's IIS.
+
+    validators=False behaves like sites that send neither ETag nor Last-Modified.
+    """
+
+    def __init__(self, pages: dict[str, bytes], validators: bool = True) -> None:
         self.pages = dict(pages)
         self.versions: dict[str, int] = {url: 1 for url in pages}
         self.requests: list[str] = []
+        self.validators = validators
 
     def replace(self, url: str, content: bytes) -> None:
         self.pages[url] = content
@@ -33,10 +46,12 @@ class FakeFetcher:
 
     async def get(self, url, etag=None, last_modified=None) -> FetchResult:
         self.requests.append(url)
-        if url.endswith(".pdf"):
+        if url not in self.pages and url.endswith(".pdf"):
             return FetchResult(url, 200, b"%PDF-1.4 fake", "application/pdf", None, None)
         if url not in self.pages:
             raise FetchError(f"{url} returned HTTP 404")
+        if not self.validators:
+            return FetchResult(url, 200, self.pages[url], "text/html", None, None)
         current = f'"v{self.versions[url]}"'
         if etag == current:
             return FetchResult(url, 304, b"", None, current, None)

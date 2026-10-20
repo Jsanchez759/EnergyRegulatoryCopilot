@@ -1,6 +1,6 @@
 import logging
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import func, literal_column, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -15,6 +15,8 @@ CANDIDATES_PER_METHOD = 40
 RRF_K = 60
 # Repealed rules stay findable (users ask about them) but should not outrank current ones.
 DEROGATED_WEIGHT = 0.6
+# Comment deadlines are Colombian calendar days; Colombia has no daylight saving time.
+COLOMBIA = timezone(timedelta(hours=-5))
 
 
 @dataclass(frozen=True)
@@ -121,6 +123,7 @@ class CorpusService:
         year: int | None,
         offset: int,
         limit: int,
+        open_consultation: bool = False,
     ) -> tuple[int, list[Norm]]:
         conditions = []
         if query:
@@ -141,6 +144,10 @@ class CorpusService:
             conditions.append(Norm.status == status)
         if year:
             conditions.append(Norm.year == year)
+        if open_consultation:
+            # Dates are ISO strings, so text order is date order.
+            today = datetime.now(COLOMBIA).date().isoformat()
+            conditions.append(Norm.extra["comment_end"].astext >= today)
         async with self._sessions() as db:
             total = await db.scalar(select(func.count()).select_from(Norm).where(*conditions))
             norms = await db.scalars(

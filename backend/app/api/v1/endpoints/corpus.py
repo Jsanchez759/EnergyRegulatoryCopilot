@@ -1,4 +1,5 @@
 import logging
+from datetime import date
 from typing import Annotated
 from urllib.parse import quote
 
@@ -38,10 +39,13 @@ router = APIRouter(prefix="/corpus", tags=["corpus"], dependencies=[Depends(get_
 
 
 def summary(norm: Norm) -> NormSummary:
+    extra = norm.extra or {}
     return NormSummary(
         id=norm.id,
         key=norm.key,
-        label=norm_label(norm.source, norm.doc_type, norm.number, norm.year),
+        label=norm_label(
+            norm.source, norm.doc_type, norm.number, norm.year, extra.get("topic", "")
+        ),
         source=norm.source,
         doc_type=norm.doc_type,
         number=norm.number,
@@ -52,7 +56,16 @@ def summary(norm: Norm) -> NormSummary:
         published_on=norm.published_on,
         url=norm.url,
         last_changed_at=norm.last_changed_at,
+        comment_start=_date(extra.get("comment_start")),
+        comment_end=_date(extra.get("comment_end")),
     )
+
+
+def _date(value: str | None) -> date | None:
+    try:
+        return date.fromisoformat(value) if value else None
+    except ValueError:
+        return None
 
 
 @router.get("/norms", summary="List regulatory norms with filters")
@@ -63,10 +76,15 @@ async def list_norms(
     doc_type: Annotated[str | None, Query(max_length=40)] = None,
     status: Annotated[str | None, Query(max_length=20)] = None,
     year: Annotated[int | None, Query(ge=1990, le=2100)] = None,
+    open_consultation: Annotated[
+        bool, Query(description="Only drafts whose comment period has not closed")
+    ] = False,
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
 ) -> NormListResponse:
-    total, norms = await corpus.find_norms(q, source, doc_type, status, year, offset, limit)
+    total, norms = await corpus.find_norms(
+        q, source, doc_type, status, year, offset, limit, open_consultation=open_consultation
+    )
     return NormListResponse(total=total, items=[summary(norm) for norm in norms])
 
 

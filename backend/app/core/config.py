@@ -63,6 +63,8 @@ class Settings(BaseSettings):
     CORPUS_CHUNK_CHARS: int = Field(default=2400, ge=500, le=8000)
     OCR_LANGUAGE: str = "spa"
     OCR_MIN_CHARS_PER_PAGE: int = Field(default=200, ge=0)
+    # Scanned annexes can run to hundreds of pages; the act itself comes first.
+    OCR_MAX_PAGES: int = Field(default=40, ge=1)
 
     RATE_LIMIT_ENABLED: bool = True
     RATE_LIMIT_STORAGE_URI: str = Field(default="memory://", repr=False)

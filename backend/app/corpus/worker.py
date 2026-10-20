@@ -22,7 +22,8 @@ from app.core.logging_config import setup_logging
 from app.core.observability import init_sentry
 from app.corpus.fetch import PoliteFetcher
 from app.corpus.pipeline import PROCESS_ENTRYPOINT, CorpusPipeline
-from app.corpus.sources import creg
+from app.corpus.sources.base import Source
+from app.corpus.sources.registry import ADAPTERS
 from app.corpus.storage import LocalBlobStorage
 from app.db import SessionFactory, engine
 from app.services.embeddings import EmbeddingClient
@@ -50,7 +51,12 @@ def make_enqueue(queries: Queries):
 
 @asynccontextmanager
 async def corpus_pipeline(queries: Queries):
-    fetcher = PoliteFetcher(min_interval_by_host={creg.HOST: creg.MIN_INTERVAL_SECONDS})
+    intervals = {
+        host: interval
+        for adapter in ADAPTERS.values()
+        for host, interval in adapter.min_interval_by_host.items()
+    }
+    fetcher = PoliteFetcher(min_interval_by_host=intervals)
     embeddings = EmbeddingClient()
     try:
         yield CorpusPipeline(
@@ -69,7 +75,9 @@ def register(pgq: PgQueuer, pipeline: CorpusPipeline) -> None:
     @pgq.entrypoint(DISCOVER_ENTRYPOINT, concurrency_limit=1)
     async def discover(job: Job) -> None:
         payload = json.loads(job.payload or b"{}")
-        await pipeline.discover_creg(years=payload["years"], mode=payload["mode"])
+        await pipeline.discover(
+            payload.get("source", "creg"), years=payload["years"], mode=payload["mode"]
+        )
 
     # The shared fetcher still paces each host; concurrency only overlaps embedding waits.
     @pgq.entrypoint(PROCESS_ENTRYPOINT, concurrency_limit=3)
@@ -80,16 +88,20 @@ def register(pgq: PgQueuer, pipeline: CorpusPipeline) -> None:
         )
         logger.info("norm processed", extra={"norm_id": payload["norm_id"], "outcome": outcome})
 
-    @pgq.schedule("corpus.creg.incremental", "0 */3 * * *")
-    async def creg_incremental(_schedule: Schedule) -> None:
-        year = datetime.now(UTC).year
-        await pipeline.discover_creg(years=[year - 1, year], mode="incremental")
+    for adapter in ADAPTERS.values():
+        schedule_source(pgq, pipeline, adapter)
 
-    # Amendments rewrite existing pages; conditional requests make this weekly pass cheap.
-    @pgq.schedule("corpus.creg.recheck", "30 4 * * 0")
-    async def creg_recheck(_schedule: Schedule) -> None:
-        queued = await pipeline.queue_recheck(creg.SOURCE)
-        logger.info("recheck queued", extra={"source": creg.SOURCE, "norms": queued})
+
+def schedule_source(pgq: PgQueuer, pipeline: CorpusPipeline, adapter: Source) -> None:
+    @pgq.schedule(f"corpus.{adapter.id}.incremental", adapter.incremental_cron)
+    async def incremental(_schedule: Schedule) -> None:
+        year = datetime.now(UTC).year
+        await pipeline.discover(adapter.id, years=[year - 1, year], mode="incremental")
+
+    @pgq.schedule(f"corpus.{adapter.id}.recheck", adapter.recheck_cron)
+    async def recheck(_schedule: Schedule) -> None:
+        queued = await pipeline.queue_recheck(adapter.id)
+        logger.info("recheck queued", extra={"source": adapter.id, "norms": queued})
 
 
 async def main() -> None:

@@ -1,9 +1,11 @@
 import hashlib
 import logging
+import mimetypes
 from collections.abc import Awaitable, Callable
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
+from asyncer import asyncify
 from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -20,9 +22,10 @@ from app.corpus.models import (
     NormRelation,
     NormVersion,
 )
-from app.corpus.sources import creg
+from app.corpus.sources.base import ListingItem, NormRef, ParsedFile, is_draft
+from app.corpus.sources.registry import adapter_for
 from app.corpus.storage import BlobStorage
-from app.corpus.text import pdf_text, split_passages
+from app.corpus.text import document_passages, document_text
 from app.models import new_id
 from app.services.embeddings import EmbeddingClient
 from app.services.errors import ProviderUnavailableError
@@ -32,8 +35,11 @@ logger = logging.getLogger(__name__)
 PROCESS_ENTRYPOINT = "corpus.process"
 # Norms first seen within this window of their publication are news; older ones are backfill.
 NEWS_WINDOW = timedelta(days=60)
-# Below this, the HTML is a stub (e.g. only a header) and the PDF holds the real text.
+# Below this, the HTML is a stub (e.g. only a header) and the original file holds the text.
 MIN_HTML_TEXT_CHARS = 1500
+
+# (size, storage key, sha256) of a stored original.
+StoredFile = tuple[int, str, str]
 
 Enqueue = Callable[[str, dict[str, Any], str], Awaitable[None]]
 
@@ -57,46 +63,51 @@ class CorpusPipeline:
         self._embeddings = embeddings
         self._enqueue = enqueue
 
-    async def discover_creg(self, years: list[int], mode: str) -> CrawlRun:
-        """Read CREG listings and queue every norm that is new or needs processing.
+    async def discover(self, source: str, years: list[int], mode: str) -> CrawlRun:
+        """Read a source's listings and queue every norm that is new or needs processing.
 
-        mode="incremental" sends conditional requests and skips unchanged listings;
-        mode="backfill" reads every listing and queues norms that were never processed.
+        mode="incremental" reads recent listings, conditionally where the source allows it;
+        mode="backfill" reads every listing for `years` and queues norms never processed.
         """
+        adapter = adapter_for(source)
         async with self._sessions() as db:
             # Discovery runs one at a time per source, so any run still open was interrupted.
             await db.execute(
                 update(CrawlRun)
-                .where(CrawlRun.source == creg.SOURCE, CrawlRun.status == "running")
+                .where(CrawlRun.source == source, CrawlRun.status == "running")
                 .values(status="abandoned", finished_at=utc_now())
             )
-            run = CrawlRun(source=creg.SOURCE, mode=mode)
+            run = CrawlRun(source=source, mode=mode)
             db.add(run)
             await db.commit()
 
         queued: set[str] = set()
-        for year in years:
-            for url in creg.listing_urls(year):
-                try:
-                    items = await self._read_listing(
-                        url, conditional=mode == "incremental", run=run
-                    )
-                except FetchError as exc:
-                    if "HTTP 404" in str(exc):
-                        continue
+
+        async def read(url: str, conditional: bool) -> bytes | None:
+            try:
+                content = await self._read_listing(url, conditional=conditional, run=run)
+            except FetchError as exc:
+                content = None
+                if "HTTP 404" not in str(exc):
                     run.errors += 1
                     run.error_sample = str(exc)[:1000]
-                    logger.warning("listing fetch failed", extra={"url": url})
-                    continue
-                if items is not None:
-                    run.items_seen += len(items)
-                    for item in items:
-                        norm_id = await self._upsert_from_listing(item)
-                        if norm_id and norm_id not in queued:
-                            queued.add(norm_id)
-                            await self._enqueue(PROCESS_ENTRYPOINT, {"norm_id": norm_id}, norm_id)
-                run.items_queued = len(queued)
-                await self._save_run(run)
+                    logger.warning("listing fetch failed", extra={"url": url, "source": source})
+            run.items_queued = len(queued)
+            await self._save_run(run)
+            return content
+
+        try:
+            async for item in adapter.discover(read, years, mode):
+                run.items_seen += 1
+                norm_id = await self._upsert_from_listing(item)
+                if norm_id and norm_id not in queued:
+                    queued.add(norm_id)
+                    await self._enqueue(PROCESS_ENTRYPOINT, {"norm_id": norm_id}, norm_id)
+        except Exception as exc:
+            run.status, run.error_sample = "failed", repr(exc)[:1000]
+            run.finished_at = utc_now()
+            await self._save_run(run)
+            raise
 
         run.items_queued = len(queued)
         run.status = "failed" if run.errors and not run.items_seen else "succeeded"
@@ -105,7 +116,7 @@ class CorpusPipeline:
         logger.info(
             "crawl finished",
             extra={
-                "source": creg.SOURCE,
+                "source": source,
                 "mode": mode,
                 "pages_fetched": run.pages_fetched,
                 "pages_unchanged": run.pages_unchanged,
@@ -131,9 +142,7 @@ class CorpusPipeline:
             )
         return len(ids)
 
-    async def _read_listing(
-        self, url: str, conditional: bool, run: CrawlRun
-    ) -> list[creg.ListingItem] | None:
+    async def _read_listing(self, url: str, conditional: bool, run: CrawlRun) -> bytes | None:
         async with self._sessions() as db:
             cache = await db.get(FetchCache, url)
         result = await self._fetcher.get(
@@ -145,6 +154,8 @@ class CorpusPipeline:
             run.pages_unchanged += 1
             return None
         run.pages_fetched += 1
+        if not (result.etag or result.last_modified):
+            return result.content
         digest = hashlib.sha256(result.content).hexdigest()
         unchanged = cache is not None and cache.content_sha256 == digest
         async with self._sessions() as db:
@@ -161,37 +172,42 @@ class CorpusPipeline:
         if unchanged and conditional:
             run.pages_unchanged += 1
             return None
-        return creg.parse_listing(result.content, url)
+        return result.content
 
-    async def _upsert_from_listing(self, item: creg.ListingItem) -> str | None:
-        key = creg.norm_key(item.doc_type, item.number, item.year)
+    async def _upsert_from_listing(self, item: ListingItem) -> str | None:
+        listing_facts = {"listing_derogated": item.derogated, **item.extra}
         async with self._sessions() as db:
             # The URL identifies the document even when its classification changes.
             norm = await db.scalar(select(Norm).where(Norm.url == item.url)) or await db.scalar(
-                select(Norm).where(Norm.key == key)
+                select(Norm).where(Norm.key == item.key)
             )
             if norm is None:
                 norm = Norm(
-                    key=key,
-                    source=creg.SOURCE,
+                    key=item.key,
+                    source=item.source,
                     doc_type=item.doc_type,
                     number=item.number,
                     year=item.year,
                     title=item.title,
+                    issued_on=item.issued_on,
                     status="derogada" if item.derogated else "desconocido",
                     url=item.url,
-                    extra={"listing_derogated": item.derogated},
+                    extra=listing_facts,
                 )
                 db.add(norm)
                 await db.commit()
                 return norm.id
-            changed = norm.extra.get("listing_derogated") != item.derogated
+            changed = any(norm.extra.get(name) != value for name, value in listing_facts.items())
             if changed:
-                norm.extra = {**norm.extra, "listing_derogated": item.derogated}
+                norm.extra = {**norm.extra, **listing_facts}
+            norm.title = norm.title or item.title
+            norm.issued_on = norm.issued_on or item.issued_on
             if norm.doc_type != item.doc_type and item.is_draft:
-                taken = await db.scalar(select(Norm.id).where(Norm.key == key, Norm.id != norm.id))
+                taken = await db.scalar(
+                    select(Norm.id).where(Norm.key == item.key, Norm.id != norm.id)
+                )
                 if taken is None:
-                    norm.key, norm.doc_type, changed = key, item.doc_type, True
+                    norm.key, norm.doc_type, changed = item.key, item.doc_type, True
             await db.commit()
             return norm.id if norm.content_sha256 is None or changed else None
 
@@ -205,12 +221,22 @@ class CorpusPipeline:
             norm = await db.get(Norm, norm_id)
             if norm is None:
                 return "missing"
-            url, etag, last_modified, previous_hash, doc_type = (
+            ref = NormRef(
+                source=norm.source,
+                url=norm.url,
+                key=norm.key,
+                doc_type=norm.doc_type,
+                number=norm.number,
+                year=norm.year,
+                title=norm.title,
+                issued_on=norm.issued_on,
+                extra=dict(norm.extra or {}),
+            )
+            url, etag, last_modified, previous_hash = (
                 norm.url,
                 norm.etag,
                 norm.last_modified,
                 norm.content_sha256,
-                norm.doc_type,
             )
             stored_page = await db.scalar(
                 select(NormVersion.raw_storage_key)
@@ -235,22 +261,27 @@ class CorpusPipeline:
                 return "not_modified"
             content, etag, last_modified = result.content, result.etag, result.last_modified
 
-        parsed = creg.parse_document(
-            content,
-            url,
-            settings.CORPUS_CHUNK_CHARS,
-            draft=doc_type == "proyecto_resolucion",
-        )
-        primary = creg.primary_pdf(parsed.files, parsed.number)
-        pdf = await self._original_file(norm_id, primary.url) if primary else None
+        parsed = adapter_for(ref.source).parse(content, ref, settings.CORPUS_CHUNK_CHARS)
+        primary = parsed.primary
+        original = await self._original_file(norm_id, primary) if primary else None
 
         text, passages, text_source = parsed.text, parsed.passages, "html"
-        if len(parsed.text) < MIN_HTML_TEXT_CHARS and pdf is not None:
-            text, text_source = pdf_text(await self._storage.get(pdf[1]))
-            passages = [
-                ("Texto completo" if index == 0 else f"Texto completo (parte {index + 1})", part)
-                for index, part in enumerate(split_passages(text, settings.CORPUS_CHUNK_CHARS))
-            ]
+        if original is not None and (
+            parsed.text_in_primary or len(parsed.text) < MIN_HTML_TEXT_CHARS
+        ):
+            stored = await self._storage.get(original[1])
+            # OCR takes seconds per page; off the event loop, the worker keeps its heartbeat.
+            extracted, method = await asyncify(document_text)(stored, primary.kind)
+            if extracted:
+                found = document_passages(extracted, settings.CORPUS_CHUNK_CHARS)
+                if parsed.text_in_primary:
+                    text = "\n\n".join(part for part in (parsed.text, extracted) if part)
+                    passages = [*parsed.passages, *found]
+                else:
+                    text, passages = extracted, found
+                text_source = method
+        if not passages and parsed.title:
+            passages = [("Título", parsed.title)]
 
         content_hash = hashlib.sha256(text.encode()).hexdigest()
         text_changed = content_hash != previous_hash
@@ -274,11 +305,12 @@ class CorpusPipeline:
                 taken = await db.scalar(select(Norm.id).where(Norm.key == parsed.key))
                 if taken is None:
                     norm.key, norm.doc_type = parsed.key, parsed.doc_type
+                    norm.number, norm.year = parsed.number, parsed.year
                 else:
                     logger.warning("parsed key belongs to another norm", extra={"key": parsed.key})
             norm.title = parsed.title or norm.title
-            norm.issued_on = parsed.issued_on
-            norm.published_on = parsed.published_on
+            norm.issued_on = parsed.issued_on or norm.issued_on
+            norm.published_on = parsed.published_on or norm.published_on
             norm.diario_oficial = parsed.diario_oficial
             norm.status = status
             norm.etag, norm.last_modified = etag, last_modified
@@ -324,7 +356,7 @@ class CorpusPipeline:
                             {
                                 "id": new_id(),
                                 "from_key": relation.from_key,
-                                "to_key": norm.key,
+                                "to_key": relation.to_key or norm.key,
                                 "relation": relation.relation,
                                 "from_article": relation.from_article,
                                 "to_article": relation.to_article,
@@ -337,7 +369,7 @@ class CorpusPipeline:
                     )
                     .on_conflict_do_nothing(constraint="uq_norm_relation")
                 )
-            await self._sync_files(db, norm_id, parsed.files, primary, pdf)
+            await self._sync_files(db, norm_id, parsed.files, primary, original)
             # Corrections from re-parsing stored pages are not regulatory news.
             if not reparse:
                 kind = (
@@ -369,9 +401,9 @@ class CorpusPipeline:
         self,
         db: AsyncSession,
         norm_id: str,
-        files: list[creg.ParsedFile],
-        primary: creg.ParsedFile | None,
-        pdf: tuple[int, str, str] | None,
+        files: list[ParsedFile],
+        primary: ParsedFile | None,
+        original: StoredFile | None,
     ) -> None:
         existing = {
             item.url: item
@@ -381,37 +413,37 @@ class CorpusPipeline:
             row = existing.get(parsed_file.url) or NormFile(norm_id=norm_id, url=parsed_file.url)
             row.label = parsed_file.label[:200]
             row.kind = "original" if parsed_file is primary else parsed_file.kind
-            if parsed_file is primary and pdf is not None and row.storage_key != pdf[1]:
-                row.size_bytes, row.storage_key, row.sha256 = pdf
-                row.content_type = "application/pdf"
+            if parsed_file is primary and original is not None and row.storage_key != original[1]:
+                row.size_bytes, row.storage_key, row.sha256 = original
+                row.content_type = mimetypes.guess_type(f"original.{parsed_file.kind}")[0]
                 row.fetched_at = utc_now()
             db.add(row)
 
-    async def _original_file(self, norm_id: str, url: str) -> tuple[int, str, str] | None:
-        """(size, storage key, sha256) of the act's PDF, downloading it only the first time."""
+    async def _original_file(self, norm_id: str, file: ParsedFile) -> StoredFile | None:
+        """The act's own file, downloaded only the first time."""
         async with self._sessions() as db:
             stored = await db.scalar(
                 select(NormFile).where(
                     NormFile.norm_id == norm_id,
-                    NormFile.url == url,
+                    NormFile.url == file.url,
                     NormFile.storage_key.is_not(None),
                 )
             )
         if stored is not None:
             return stored.size_bytes, stored.storage_key, stored.sha256
-        downloaded = await self._download(url)
+        downloaded = await self._download(file.url, f".{file.kind}")
         if downloaded is None:
             return None
         content, storage_key = downloaded
         return len(content), storage_key, hashlib.sha256(content).hexdigest()
 
-    async def _download(self, url: str) -> tuple[bytes, str] | None:
+    async def _download(self, url: str, suffix: str) -> tuple[bytes, str] | None:
         try:
             result = await self._fetcher.get(url)
         except FetchError:
             logger.warning("original file download failed", extra={"url": url})
             return None
-        return result.content, await self._storage.put(result.content, ".pdf")
+        return result.content, await self._storage.put(result.content, suffix)
 
     async def _embed(self, texts: list[str]) -> list[list[float]] | None:
         if not self._embeddings.available or not texts:
@@ -476,7 +508,7 @@ class CorpusPipeline:
 
 
 def _status(doc_type: str, derogated_in_text: bool, extra: dict[str, Any]) -> str:
-    if doc_type == "proyecto_resolucion":
+    if is_draft(doc_type):
         return "proyecto"
     return "derogada" if derogated_in_text or extra.get("listing_derogated") else "vigente"
 

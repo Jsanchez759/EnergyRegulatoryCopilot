@@ -51,11 +51,11 @@ serve: ## Start the FastAPI production server
 worker: migrate ## Start only the regulatory corpus worker
 	$(UV) run --directory backend python -m app.corpus.worker
 
-backfill: ## Queue a full CREG crawl since CORPUS_START_YEAR (the worker processes it)
-	$(UV) run --directory backend python -m app.corpus.cli backfill
+backfill: ## Queue a full crawl since CORPUS_START_YEAR (SOURCE=creg|minenergia to limit it)
+	$(UV) run --directory backend python -m app.corpus.cli backfill $(if $(SOURCE),--source $(SOURCE))
 
-crawl: ## Queue an incremental CREG crawl now
-	$(UV) run --directory backend python -m app.corpus.cli discover
+crawl: ## Queue an incremental crawl now (SOURCE=creg|minenergia to limit it)
+	$(UV) run --directory backend python -m app.corpus.cli discover $(if $(SOURCE),--source $(SOURCE))
 
 frontend: ## Start only the Vite frontend
 	VITE_API_BASE_URL="$(API_BASE_URL)" $(NPM) --prefix frontend run dev -- --host $(WEB_HOST) --port $(WEB_PORT)

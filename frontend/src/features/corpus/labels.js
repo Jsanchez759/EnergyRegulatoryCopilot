@@ -31,6 +31,25 @@ const RELATION_PAST = {
   prorroga: "prorrogó",
 };
 
+export function eventLabel(event) {
+  if (event.kind === "norma_nueva" && event.norm?.status === "proyecto") return "Nuevo proyecto";
+  return EVENT_KINDS[event.kind] || event.kind;
+}
+
+export function consultation(norm) {
+  if (!norm?.comment_end) return null;
+  const open = norm.comment_end >= localIsoDate(new Date());
+  return {
+    open,
+    label: open ? `Comentarios hasta ${formatDate(norm.comment_end)}` : `Consulta cerrada el ${formatDate(norm.comment_end)}`,
+  };
+}
+
+function localIsoDate(date) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
 export function relationVerb(relation) {
   return RELATION_PAST[relation] || relation;
 }

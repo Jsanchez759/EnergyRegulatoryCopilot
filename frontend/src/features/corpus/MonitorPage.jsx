@@ -1,8 +1,9 @@
 import { Link, useSearchParams } from "react-router-dom";
 
 import { useCorpusFeed, useCorpusStatus, useNorms, useSourceCatalog } from "./api";
+import Deadline from "./Deadline";
 import {
-  EVENT_KINDS,
+  eventLabel,
   FEED_FILTERS,
   formatDate,
   relativeDay,
@@ -53,7 +54,7 @@ function FeedItem({ event, catalog }) {
   return (
     <li className="feed-item">
       <div className="feed-item-meta">
-        <span className={`event-kind is-${event.kind}`}>{EVENT_KINDS[event.kind] || event.kind}</span>
+        <span className={`event-kind is-${event.kind}`}>{eventLabel(event)}</span>
         <span className="source-tag">{sourceName(catalog, norm.source)}</span>
         {norm.issued_on && <span>Expedida {formatDate(norm.issued_on)}</span>}
       </div>
@@ -62,8 +63,37 @@ function FeedItem({ event, catalog }) {
       <div className="feed-item-footer">
         <StatusBadge status={norm.status} />
         {statusChange && <span className="feed-item-note">Pasó a «{statusChange}»</span>}
+        <Deadline norm={norm} />
       </div>
     </li>
+  );
+}
+
+function DraftList({ items }) {
+  return (
+    <ul className="draft-list">
+      {items.map((draft) => <li key={draft.id}>
+        <Link to={`/normativa/${draft.id}`}>{draft.label}</Link>
+        {draft.comment_end
+          ? <Deadline norm={draft} />
+          : <small>{draft.published_on ? `Publicado ${formatDate(draft.published_on)}` : formatDate(draft.issued_on)}</small>}
+        {draft.title && <p>{draft.title}</p>}
+      </li>)}
+    </ul>
+  );
+}
+
+function OpenConsultations({ source }) {
+  const open = useNorms({ open_consultation: true, source, limit: 20 });
+  const items = [...(open.data?.items || [])].sort((a, b) => a.comment_end.localeCompare(b.comment_end));
+  if (!items.length) return null;
+  return (
+    <section className="monitor-panel" aria-label="Consultas abiertas">
+      <h2>Consultas abiertas</h2>
+      <p className="monitor-panel-note">Proyectos que todavía reciben comentarios, por fecha de cierre.</p>
+      <DraftList items={items} />
+      <Link className="monitor-panel-link" to="/normativa?open=1">Ver todas las consultas abiertas</Link>
+    </section>
   );
 }
 
@@ -73,14 +103,10 @@ function RecentDrafts({ source }) {
   return (
     <section className="monitor-panel" aria-label="Proyectos recientes">
       <h2>Proyectos recientes</h2>
-      <p className="monitor-panel-note">Normas publicadas para comentarios. Revisa el plazo en el texto de cada proyecto.</p>
-      {drafts.isLoading ? <p className="monitor-empty">Cargando…</p> : items.length ? <ul className="draft-list">
-        {items.map((draft) => <li key={draft.id}>
-          <Link to={`/normativa/${draft.id}`}>{draft.label}</Link>
-          <small>{draft.published_on ? `Publicado ${formatDate(draft.published_on)}` : formatDate(draft.issued_on)}</small>
-          {draft.title && <p>{draft.title}</p>}
-        </li>)}
-      </ul> : <p className="monitor-empty">No hay proyectos indexados todavía.</p>}
+      <p className="monitor-panel-note">Normas publicadas para comentarios. Si la fuente no publica el plazo, está en el texto del proyecto.</p>
+      {drafts.isLoading ? <p className="monitor-empty">Cargando…</p> : items.length
+        ? <DraftList items={items} />
+        : <p className="monitor-empty">No hay proyectos indexados todavía.</p>}
       <Link className="monitor-panel-link" to="/normativa?status=proyecto">Ver todos los proyectos</Link>
     </section>
   );
@@ -139,6 +165,7 @@ export default function MonitorPage() {
           </button>}
         </section>
         <aside className="monitor-aside">
+          <OpenConsultations source={source} />
           <RecentDrafts source={source} />
         </aside>
       </div>
