@@ -1,8 +1,10 @@
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import health, questions, rag
+from app.api.v1.endpoints import agent, auth, conversations, health, sources
 
 api_router = APIRouter()
-api_router.include_router(health.router, tags=["health"])
-api_router.include_router(questions.router, prefix="/questions", tags=["questions"])
-api_router.include_router(rag.router, prefix="/rag", tags=["rag"])
+api_router.include_router(health.router)
+api_router.include_router(auth.router)
+api_router.include_router(conversations.router)
+api_router.include_router(agent.router)
+api_router.include_router(sources.router)

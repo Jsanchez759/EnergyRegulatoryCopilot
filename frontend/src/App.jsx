@@ -1,534 +1,426 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+import AccountPanel from "./features/auth/AccountPanel";
+import AuthScreen from "./features/auth/AuthScreen";
+import { authApi, authQueryKey } from "./features/auth/api";
+import {
+  conversationsQueryKey,
+  useConversationMessages,
+  useConversations,
+  useCreateConversation,
+  useDeleteConversation,
+} from "./features/chat/api";
+import { consumeSseResponse } from "./features/chat/stream";
+import { useDocuments } from "./features/documents/queries";
+import SourceLibrary from "./features/documents/SourceLibrary";
+import { API_BASE_URL, requestJson } from "./lib/api";
+import Icon from "./shared/Icon";
 
-function safeError(error) {
-  return error?.message || "Error inesperado.";
+const THEME_STORAGE_KEY = "enercol_theme_v1";
+const AUTH_SYNC_KEY = "enercol_auth_changed";
+const STARTERS = [
+  "¿Qué establece la regulación sobre autogeneración?",
+  "Resume las reglas para conectar un proyecto solar.",
+  "¿Qué obligaciones tiene un comercializador de energía?",
+];
+
+function nowLabel(value) {
+  const date = value ? new Date(value) : new Date();
+  return date.toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" });
 }
 
-function nowLabel() {
-  return new Date().toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" });
+function makeId() {
+  return crypto.randomUUID();
 }
 
-function buildAuthHeaders(apiKey) {
-  return apiKey ? { "X-OpenRouter-Api-Key": apiKey } : {};
+function AppLoading() {
+  return <main className="app-loading"><span className="brand-mark"><span /><span /><span /></span><span>Preparando EnerCol…</span></main>;
 }
 
-function createChat(index = 1) {
-  return {
-    id: crypto.randomUUID(),
-    title: `Conversacion ${index}`,
-    messages: [
-      {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        mode: "ask",
-        content:
-          "Hola. Este es un chat especializado en regulacion energetica colombiana. Puedes usar modo Ask o modo RAG con documentos indexados.",
-        meta: "Sistema",
-        time: nowLabel(),
-      },
-    ],
-  };
+function AppUnavailable({ onRetry }) {
+  return <main className="app-unavailable"><span className="brand-mark"><span /><span /><span /></span><h1>No pudimos conectar.</h1><p>Comprueba que el servidor esté activo e inténtalo de nuevo.</p><button type="button" onClick={onRetry}>Reintentar</button></main>;
 }
 
-async function requestJson(url, options = {}, apiKey = "") {
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      ...(options.headers || {}),
-      ...buildAuthHeaders(apiKey),
+function AuditPanel({ audit }) {
+  if (!audit) return null;
+  return (
+    <details className="audit-panel">
+      <summary><Icon name="file" size={15} /><span>Auditoría · {audit.sources.length} fuentes</span><span className="reference-chevron">⌄</span></summary>
+      <div className="audit-content">
+        <p className="audit-method">{audit.method}</p>
+        {audit.steps.length > 0 && <ol className="audit-steps">
+          {audit.steps.map((step, index) => <li key={`${step.tool}-${index}`}>
+            <strong>{step.tool === "search_uploaded_documents" ? "Documentos" : "Web"}</strong>
+            <span>{step.summary}</span><code>{step.query}</code>
+          </li>)}
+        </ol>}
+        {audit.sources.length > 0 ? <ul className="audit-sources">
+          {audit.sources.map((source) => <li key={source.id}>
+            <span className="source-id">{source.id}</span>
+            <div className="audit-source-copy">
+              <strong>{source.url ? <a href={source.url} target="_blank" rel="noreferrer">{source.title}</a> : source.title}</strong>
+              {source.page && <small>Página {source.page}</small>}
+              {source.file_sha256 && <small>SHA-256 · {source.file_sha256}</small>}
+              <details><summary>Ver evidencia</summary><p>{source.snippet}</p></details>
+            </div>
+          </li>)}
+        </ul> : <p className="audit-empty">No se encontraron fuentes verificables.</p>}
+      </div>
+    </details>
+  );
+}
+
+function AuthenticatedWorkspace({ user }) {
+  const queryClient = useQueryClient();
+  const [activeConversationId, setActiveConversationId] = useState("");
+  const [theme, setTheme] = useState(() => localStorage.getItem(THEME_STORAGE_KEY) || "light");
+  const [input, setInput] = useState("");
+  const [conversationSearch, setConversationSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [isSending, setIsSending] = useState(false);
+  const [streamStatus, setStreamStatus] = useState("Listo");
+  const [showHistory, setShowHistory] = useState(() => !window.matchMedia("(max-width: 700px)").matches);
+  const [showSources, setShowSources] = useState(() => !window.matchMedia("(max-width: 1020px)").matches);
+  const [showAccount, setShowAccount] = useState(false);
+  const [appError, setAppError] = useState("");
+  const messagesEndRef = useRef(null);
+  const searchInputRef = useRef(null);
+  const initialConversationStarted = useRef(false);
+  const allConversationsQuery = useConversations();
+  const searchConversationsQuery = useConversations(debouncedSearch);
+  const conversationsQuery = debouncedSearch ? searchConversationsQuery : allConversationsQuery;
+  const messagesQuery = useConversationMessages(activeConversationId);
+  const documentsQuery = useDocuments();
+  const createConversation = useCreateConversation();
+  const deleteConversation = useDeleteConversation();
+  const conversations = conversationsQuery.data?.conversations || [];
+  const allConversations = allConversationsQuery.data?.conversations || [];
+  const activeConversation = allConversations.find((item) => item.id === activeConversationId) || allConversations[0];
+  const messages = messagesQuery.data?.messages || [];
+  const logoutMutation = useMutation({
+    mutationFn: authApi.logout,
+    onSuccess: () => {
+      localStorage.setItem(AUTH_SYNC_KEY, String(Date.now()));
+      queryClient.setQueryData(authQueryKey, null);
+      queryClient.removeQueries({ queryKey: conversationsQueryKey });
+      queryClient.removeQueries({ queryKey: ["documents"] });
     },
   });
-  const text = await response.text();
-  const data = (() => {
-    try {
-      return JSON.parse(text);
-    } catch {
-      return { raw: text };
-    }
-  })();
-  if (!response.ok) throw new Error(JSON.stringify({ status: response.status, data }, null, 2));
-  return data;
-}
-
-async function consumeSseResponse(response, onEvent) {
-  if (!response.body) throw new Error("La respuesta no incluye stream de datos.");
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder("utf-8");
-  let buffer = "";
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const events = buffer.split("\n\n");
-    buffer = events.pop() || "";
-    for (const rawEvent of events) {
-      const line = rawEvent.split("\n").find((part) => part.startsWith("data: "));
-      if (!line) continue;
-      try {
-        onEvent(JSON.parse(line.slice(6)));
-      } catch {
-        // Ignore malformed chunks.
-      }
-    }
-  }
-}
-
-function historyForApi(messages) {
-  return messages
-    .filter(
-      (item) =>
-        (item.role === "user" || item.role === "assistant") &&
-        typeof item.content === "string" &&
-        item.content.trim().length > 0
-    )
-    .slice(-12)
-    .map((item) => ({ role: item.role, content: item.content }));
-}
-
-export default function App() {
-  const [openRouterApiKey, setOpenRouterApiKey] = useState("");
-  const [showApiHint, setShowApiHint] = useState(false);
-  const [theme, setTheme] = useState(localStorage.getItem("erc_theme") || "light");
-  const [showLeftPanel, setShowLeftPanel] = useState(true);
-  const [showDocsPanel, setShowDocsPanel] = useState(true);
-  const [mode, setMode] = useState("ask");
-  const [topK, setTopK] = useState(4);
-  const [input, setInput] = useState("");
-  const [isSending, setIsSending] = useState(false);
-  const [streamStatus, setStreamStatus] = useState("inactivo");
-  const [pdfFile, setPdfFile] = useState(null);
-  const [isUploading, setIsUploading] = useState(false);
-  const [documents, setDocuments] = useState([]);
-  const [isLoadingDocs, setIsLoadingDocs] = useState(false);
-  const [sidebarStatus, setSidebarStatus] = useState("Configura la API key para empezar.");
-  const [chats, setChats] = useState([createChat()]);
-  const [activeChatId, setActiveChatId] = useState("");
-  const listRef = useRef(null);
-  const isApiKeyMissing = openRouterApiKey.trim().length === 0;
-
-  useEffect(() => {
-    if (!activeChatId && chats.length) setActiveChatId(chats[0].id);
-  }, [activeChatId, chats]);
 
   useEffect(() => {
     document.body.dataset.theme = theme;
-    localStorage.setItem("erc_theme", theme);
+    localStorage.setItem(THEME_STORAGE_KEY, theme);
   }, [theme]);
 
   useEffect(() => {
-    if (isApiKeyMissing) return;
-    void loadDocuments();
-  }, [isApiKeyMissing]);
+    const timeout = window.setTimeout(() => setDebouncedSearch(conversationSearch.trim()), 180);
+    return () => window.clearTimeout(timeout);
+  }, [conversationSearch]);
 
   useEffect(() => {
-    listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
-  }, [chats, activeChatId, isSending]);
-
-  const activeChat = useMemo(() => chats.find((chat) => chat.id === activeChatId) || chats[0], [chats, activeChatId]);
-  const messages = activeChat?.messages || [];
-
-  function updateActiveChat(updater) {
-    setChats((prev) =>
-      prev.map((chat) => (chat.id === activeChatId ? { ...chat, messages: updater(chat.messages) } : chat))
-    );
-  }
-
-  function createNewChat() {
-    const newChat = createChat(chats.length + 1);
-    setChats((prev) => [newChat, ...prev]);
-    setActiveChatId(newChat.id);
-  }
-
-  function deleteChat(chatId) {
-    if (chats.length === 1) {
-      const fresh = createChat(1);
-      setChats([fresh]);
-      setActiveChatId(fresh.id);
-      return;
+    function onSearchShortcut(event) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setShowHistory(true);
+        window.setTimeout(() => searchInputRef.current?.focus(), 0);
+      }
+      if (event.key === "Escape" && document.activeElement === searchInputRef.current) {
+        setConversationSearch("");
+        searchInputRef.current?.blur();
+      }
     }
-    const next = chats.filter((chat) => chat.id !== chatId);
-    setChats(next);
-    if (activeChatId === chatId && next.length) setActiveChatId(next[0].id);
-  }
+    window.addEventListener("keydown", onSearchShortcut);
+    return () => window.removeEventListener("keydown", onSearchShortcut);
+  }, []);
 
-  async function copyText(text) {
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      // Ignore clipboard errors.
+  useEffect(() => {
+    if (activeConversation && activeConversation.id !== activeConversationId) {
+      setActiveConversationId(activeConversation.id);
     }
-  }
+  }, [activeConversation, activeConversationId]);
 
-  async function loadDocuments() {
-    setIsLoadingDocs(true);
-    setSidebarStatus("Cargando documentos...");
+  useEffect(() => {
+    if (debouncedSearch || !allConversationsQuery.isSuccess || allConversations.length || initialConversationStarted.current) return;
+    initialConversationStarted.current = true;
+    createConversation.mutate(undefined, {
+      onSuccess: (conversation) => setActiveConversationId(conversation.id),
+    });
+  }, [allConversationsQuery.isSuccess, allConversations.length, createConversation, debouncedSearch]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [messages, isSending]);
+
+  async function createNewChat() {
+    if (isSending || createConversation.isPending) return;
+    setAppError("");
     try {
-      const data = await requestJson(`${API_BASE_URL}/rag/documents`, {}, openRouterApiKey);
-      const docs = data.documents || [];
-      setDocuments(docs);
-      setSidebarStatus(docs.length ? "" : "No hay documentos indexados todavia.");
+      const conversation = await createConversation.mutateAsync();
+      setActiveConversationId(conversation.id);
+      setStreamStatus("Listo");
     } catch (error) {
-      setSidebarStatus(`No se pudo cargar el listado: ${safeError(error)}`);
-    } finally {
-      setIsLoadingDocs(false);
+      setAppError(error.message);
     }
   }
 
-  async function onUploadDocument(event) {
-    event.preventDefault();
-    if (isApiKeyMissing) {
-      setShowApiHint(true);
-      setSidebarStatus("Debes ingresar tu OPENROUTER_API_KEY para continuar.");
-      return;
-    }
-    if (!pdfFile) {
-      setSidebarStatus("Selecciona un PDF antes de subir.");
-      return;
-    }
-
-    setIsUploading(true);
-    setSidebarStatus("Subiendo e indexando documento...");
+  async function removeConversation(conversationId) {
     try {
-      const formData = new FormData();
-      formData.append("file", pdfFile);
-      const result = await requestJson(`${API_BASE_URL}/rag/documents/upload`, { method: "POST", body: formData }, openRouterApiKey);
-      setPdfFile(null);
-      setSidebarStatus(`Documento indexado: ${result.filename} (${result.chunks_indexed} chunks).`);
-      await loadDocuments();
+      await deleteConversation.mutateAsync(conversationId);
+      if (activeConversationId === conversationId) {
+        const nextConversation = allConversations.find((item) => item.id !== conversationId);
+        setActiveConversationId(nextConversation?.id || "");
+      }
     } catch (error) {
-      setSidebarStatus(`Error de carga: ${safeError(error)}`);
-    } finally {
-      setIsUploading(false);
+      setAppError(error.message);
     }
   }
 
   async function onSendMessage(event) {
     event.preventDefault();
     const question = input.trim();
-    if (isApiKeyMissing) {
-      setShowApiHint(true);
-      setStreamStatus("API key requerida");
-      return;
-    }
-    if (!question || isSending || !activeChatId) return;
+    const conversationId = activeConversation?.id;
+    if (!question || isSending || !conversationId) return;
 
-    const userMessage = {
-      id: crypto.randomUUID(),
-      role: "user",
-      mode,
-      content: question,
-      meta: mode === "rag" ? `RAG (top_k=${topK})` : "Ask",
-      time: nowLabel(),
-    };
-
-    updateActiveChat((prev) => [...prev, userMessage]);
+    const queryKey = [...conversationsQueryKey, conversationId, "messages"];
+    const assistantId = makeId();
+    const userMessage = { id: makeId(), role: "user", content: question, created_at: new Date().toISOString() };
+    queryClient.setQueryData(queryKey, (current) => ({
+      messages: [...(current?.messages || []), userMessage, {
+        id: assistantId, role: "assistant", content: "", audit: null, created_at: new Date().toISOString(),
+      }],
+    }));
     setInput("");
     setIsSending(true);
-    setStreamStatus("conectando");
+    setAppError("");
+    setStreamStatus("Conectando");
 
     try {
-      const assistantId = crypto.randomUUID();
-      updateActiveChat((prev) => [
-        ...prev,
-        {
-          id: assistantId,
-          role: "assistant",
-          mode,
-          content: "",
-          references: [],
-          meta: mode === "rag" ? "Respuesta RAG" : "Respuesta Ask",
-          time: nowLabel(),
-        },
-      ]);
-
-      const target = mode === "rag" ? `${API_BASE_URL}/rag/ask/stream` : `${API_BASE_URL}/questions/ask/stream`;
-      const body =
-        mode === "rag"
-          ? { question, top_k: topK }
-          : { question, history: historyForApi([...messages, userMessage]) };
-
-      const response = await fetch(target, {
+      const response = await fetch(`${API_BASE_URL}/agent/stream`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...buildAuthHeaders(openRouterApiKey),
-        },
-        body: JSON.stringify(body),
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question, conversation_id: conversationId }),
       });
       if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(errorText || `Error HTTP ${response.status}`);
+        let errorMessage = `Error del servidor (${response.status}).`;
+        try { errorMessage = (await response.json()).detail || errorMessage; } catch { /* Keep the status message. */ }
+        throw new Error(errorMessage);
       }
-      setStreamStatus("recibiendo");
-
-      await consumeSseResponse(response, (evt) => {
-        if (evt.error) throw new Error(evt.error);
-        if (evt.references) {
-          updateActiveChat((prev) =>
-            prev.map((item) => (item.id === assistantId ? { ...item, references: evt.references } : item))
-          );
+      setStreamStatus("En respuesta");
+      await consumeSseResponse(response, (eventData) => {
+        if (eventData.error) throw new Error(eventData.error);
+        if (eventData.activity) setStreamStatus(eventData.activity.summary || "Consultando fuentes");
+        if (eventData.audit) {
+          queryClient.setQueryData(queryKey, (current) => ({
+            ...current,
+            messages: (current?.messages || []).map((message) => message.id === assistantId ? { ...message, audit: eventData.audit } : message),
+          }));
         }
-        if (evt.delta) {
-          updateActiveChat((prev) =>
-            prev.map((item) =>
-              item.id === assistantId ? { ...item, content: `${item.content}${evt.delta}` } : item
-            )
-          );
+        if (eventData.delta) {
+          queryClient.setQueryData(queryKey, (current) => ({
+            ...current,
+            messages: (current?.messages || []).map((message) => message.id === assistantId ? { ...message, content: message.content + eventData.delta } : message),
+          }));
         }
-        if (evt.done) {
-          setStreamStatus("finalizado");
-        }
+        if (eventData.done) setStreamStatus("Completado");
       });
-    } catch (error) {
-      updateActiveChat((prev) => [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          mode,
-          content: `Error al consultar el backend:\n${safeError(error)}`,
-          meta: "Error",
-          time: nowLabel(),
-        },
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: conversationsQueryKey }),
+        queryClient.invalidateQueries({ queryKey }),
       ]);
-      setStreamStatus("error");
+    } catch (error) {
+      const userFacingError = error instanceof TypeError
+        ? "No se pudo conectar con EnerCol. Comprueba que el servidor esté activo e inténtalo de nuevo."
+        : error.message;
+      setAppError("");
+      queryClient.setQueryData(queryKey, (current) => ({
+        messages: (current?.messages || []).map((message) => message.id === assistantId
+          ? { ...message, content: `No se pudo completar la consulta. ${userFacingError}`, meta: "Error" }
+          : message),
+      }));
+      setStreamStatus("Error");
     } finally {
       setIsSending(false);
     }
   }
 
+  function exportConversation() {
+    if (!activeConversation || !messages.length) return;
+    const transcript = [
+      `# ${activeConversation.title}`,
+      "",
+      `Exportado desde EnerCol el ${new Date().toLocaleString("es-CO")}`,
+      "",
+      ...messages.flatMap((message) => {
+        const heading = message.role === "user" ? "## Consulta" : "## EnerCol";
+        const audit = message.audit ? [
+          "",
+          `Método: ${message.audit.method}`,
+          ...message.audit.sources.map((source) => {
+            const detail = source.page ? `, página ${source.page}` : "";
+            return `- [${source.id}] ${source.title}${detail}${source.url ? ` — ${source.url}` : ""}`;
+          }),
+        ] : [];
+        return [heading, "", message.content, ...audit, ""];
+      }),
+    ].join("\n");
+    const blobUrl = URL.createObjectURL(new Blob([transcript], { type: "text/markdown;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = blobUrl;
+    const fileName = activeConversation.title.normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+    link.download = `${fileName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "consulta"}.md`;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+  }
+
+  function onDeleteAccount() {
+    localStorage.setItem(AUTH_SYNC_KEY, String(Date.now()));
+    queryClient.setQueryData(authQueryKey, null);
+    queryClient.removeQueries({ queryKey: conversationsQueryKey });
+    queryClient.removeQueries({ queryKey: ["documents"] });
+    setShowAccount(false);
+  }
+
   return (
-    <div className="app">
-      <div className="bg-layer" />
-      <main
-        className={`shell three-cols ${showLeftPanel ? "" : "hide-left"} ${showDocsPanel ? "" : "hide-right"}`}
-        style={{ display: "grid" }}
-      >
-        {showLeftPanel ? (
-          <aside className="left-pane">
-          <div className="left-head">
-            <h2>Conversaciones</h2>
-            <button type="button" className="ghost mini" onClick={() => setShowLeftPanel(false)}>
-              Ocultar
+    <main className={`workspace ${!showHistory ? "history-hidden" : ""} ${!showSources ? "sources-hidden" : ""}`}>
+      {showHistory && <aside className="history-pane" aria-label="Conversaciones">
+        <a className="brand" href="#inicio" aria-label="EnerCol inicio">
+          <span className="brand-mark"><span /><span /><span /></span><span>enercol<span className="brand-period">.</span></span>
+        </a>
+        <button className="mobile-close" type="button" onClick={() => setShowHistory(false)} aria-label="Cerrar conversaciones"><Icon name="close" size={18} /></button>
+        <button className="new-chat-button" type="button" onClick={createNewChat} disabled={isSending}>
+          <Icon name="plus" size={16} /> Nueva consulta
+        </button>
+        <div className="conversation-search">
+          <Icon name="search" size={16} />
+          <input
+            ref={searchInputRef}
+            type="search"
+            value={conversationSearch}
+            onChange={(event) => setConversationSearch(event.target.value)}
+            placeholder="Buscar consultas"
+            aria-label="Buscar en tus consultas"
+          />
+          {!conversationSearch && <kbd>⌘ K</kbd>}
+          {conversationSearch && <button type="button" onClick={() => setConversationSearch("")} aria-label="Limpiar búsqueda">×</button>}
+        </div>
+        <div className="sidebar-label">{debouncedSearch ? "Resultados" : "Recientes"}</div>
+        <nav className="conversation-list">
+          {conversations.map((conversation) => <div key={conversation.id} className={`conversation-row ${conversation.id === activeConversation?.id ? "is-active" : ""}`}>
+            <button type="button" className="conversation-select" onClick={() => setActiveConversationId(conversation.id)} title={conversation.title}>
+              <span className="conversation-dot" />{conversation.title}
             </button>
-          </div>
-          <button type="button" className="ghost" onClick={createNewChat}>
-            Nueva conversacion
+            <button className="conversation-delete" type="button" onClick={() => void removeConversation(conversation.id)} aria-label={`Eliminar ${conversation.title}`} title="Eliminar">×</button>
+          </div>)}
+          {debouncedSearch && conversations.length === 0 && <p className="conversation-empty">No hay consultas que coincidan.</p>}
+        </nav>
+        <div className="sidebar-bottom">
+          <div className="sidebar-caption">Asistente de investigación</div>
+          <div className="sidebar-subcaption">Regulación energética · Colombia</div>
+          <button className="theme-toggle" type="button" onClick={() => setTheme((value) => value === "light" ? "dark" : "light")}>
+            <Icon name="sun" size={16} /> Apariencia <span>{theme === "light" ? "Claro" : "Oscuro"}</span>
           </button>
-          <div className="chat-list">
-            {chats.map((chat) => (
-              <div key={chat.id} className={`chat-item ${chat.id === activeChatId ? "active" : ""}`}>
-                <button type="button" className="chat-select" onClick={() => setActiveChatId(chat.id)}>
-                  {chat.title}
-                </button>
-                <button type="button" className="chat-delete" onClick={() => deleteChat(chat.id)}>
-                  Borrar
-                </button>
+        </div>
+      </aside>}
+
+      <section className="research-pane">
+        <header className="topbar">
+          <div className="breadcrumb"><span>Colombia</span><span className="breadcrumb-separator">/</span><strong>Investigación regulatoria</strong></div>
+          <div className="topbar-actions">
+            {!showHistory && <button className="icon-button" type="button" onClick={() => setShowHistory(true)} aria-label="Mostrar conversaciones" title="Conversaciones">☰</button>}
+            <span className={`connection-indicator ${documentsQuery.isError ? "is-offline" : ""}`} />
+            <span className="connection-label">{documentsQuery.isError ? "Backend sin conexión" : documentsQuery.isLoading ? "Conectando…" : "Espacio privado"}</span>
+            <button className={`source-toggle ${!showSources ? "is-visible" : ""}`} type="button" onClick={() => setShowSources((value) => !value)}>{showSources ? "Ocultar fuentes" : "Ver fuentes"}</button>
+            {messages.length > 0 && <button className="export-button" type="button" onClick={exportConversation} title="Descargar conversación con referencias">Exportar</button>}
+            <button className="account-trigger" type="button" onClick={() => setShowAccount(true)} aria-label="Gestionar cuenta" title="Gestionar cuenta"><span>{user.display_name.slice(0, 1).toUpperCase()}</span></button>
+            <button className="topbar-signout" type="button" onClick={() => logoutMutation.mutate()} disabled={logoutMutation.isPending}>Salir</button>
+          </div>
+        </header>
+
+        <div className="conversation-workspace">
+          <div className="thread-toolbar">
+            <span className="agent-label">AGENTE DE INVESTIGACIÓN</span>
+            <span className="stream-status"><span className={isSending ? "status-pulse" : "status-dot"} />{streamStatus}</span>
+          </div>
+          <div className="message-scroll">
+            {appError && <p className="inline-app-error" role="status">{appError}</p>}
+            {messages.length === 0 ? <div className="welcome-view">
+              <div className="welcome-rule"><span /> REGULACIÓN ENERGÉTICA DE COLOMBIA</div>
+              <h1>¿Qué necesitas<br /><em>entender hoy?</em></h1>
+              <p className="welcome-copy">Consulta regulación energética o busca dentro de tus propios documentos.</p>
+              <div className="suggestion-list" aria-label="Preguntas sugeridas">
+                {STARTERS.map((question, index) => <button key={question} type="button" onClick={() => setInput(question)}>
+                  <span className="suggestion-index">0{index + 1}</span><span>{question}</span><span className="suggestion-arrow">↗</span>
+                </button>)}
               </div>
-            ))}
+              <div className="welcome-footnote"><span className="footnote-line" />Las respuestas generales pueden requerir verificación en fuentes oficiales.</div>
+            </div> : <div className="message-thread">
+              {messages.map((message) => <article key={message.id} className={`message-row ${message.role}`}>
+                {message.role === "assistant" && <div className="assistant-mark"><span /><span /><span /></div>}
+                <div className="message-column">
+                  <div className="message-byline"><strong>{message.role === "user" ? "Tú" : message.meta || "EnerCol"}</strong><span>{nowLabel(message.created_at)}</span></div>
+                  <div className="message-content markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown></div>
+                  {message.role === "assistant" && <AuditPanel audit={message.audit} />}
+                </div>
+              </article>)}
+              {isSending && <div className="thinking-indicator"><span /><span /><span /> Preparando respuesta</div>}
+              <div ref={messagesEndRef} />
+            </div>}
           </div>
-          <div className="guide-box">
-            <h3>Como usar</h3>
-            <p>1. Selecciona modo Ask para preguntas generales o RAG para usar documentos.</p>
-            <p>2. En modo RAG, sube PDF y luego consulta.</p>
-            <p>3. Revisa referencias expandibles para ver chunks fuente.</p>
-          </div>
-          </aside>
-        ) : null}
-
-        <section className="chat-pane">
-          <header className="chat-header">
-            <div>
-              <p className="kicker">EnerCol Chat</p>
-              <h1>Consultor IA de Normativa CREG y Mercado Electrico</h1>
-            </div>
-            <div className="mode-switch">
-              {!showLeftPanel ? (
-                <button type="button" onClick={() => setShowLeftPanel(true)}>
-                  Mostrar panel
-                </button>
-              ) : null}
-              {!showDocsPanel ? (
-                <button type="button" onClick={() => setShowDocsPanel(true)}>
-                  Mostrar documentos
-                </button>
-              ) : null}
-              <button type="button" className={mode === "ask" ? "active" : ""} onClick={() => setMode("ask")}>
-                Modo Ask
-              </button>
-              <button type="button" className={mode === "rag" ? "active" : ""} onClick={() => setMode("rag")}>
-                Modo RAG
-              </button>
-            </div>
-          </header>
-
-          <div className="connection-row">
-            <label>API Key</label>
-            <div className="key-badge">
-              <input
-                type="password"
-                value={openRouterApiKey}
-                onChange={(e) => setOpenRouterApiKey(e.target.value)}
-                placeholder="sk-or-v1-..."
+          <div className="composer-wrap">
+            <form className="composer" onSubmit={onSendMessage}>
+              <textarea
+                rows={2}
+                aria-label="Escribe tu consulta"
+                placeholder="Pregunta sobre regulación energética o tus fuentes…"
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+                onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); event.currentTarget.form.requestSubmit(); } }}
               />
-              <button
-                type="button"
-                className="ghost mini"
-                onClick={() => setShowApiHint((v) => !v)}
-              >
-                ?
-              </button>
-              {showApiHint ? (
-                <div className="api-popover">
-                  <p>
-                    Debes ingresar tu <code>OPENROUTER_API_KEY</code> para usar el chat.
-                  </p>
-                  <p>
-                    Esta app usa modelos <strong>free</strong> de OpenRouter.
-                  </p>
-                  <p className="aside-note">
-                    <a href="https://www.youtube.com/watch?v=ZELx_OzYAQo" target="_blank" rel="noreferrer">
-                      Video paso a paso
-                    </a>
-                    {" · "}
-                    <a href="https://openrouter.ai/" target="_blank" rel="noreferrer">
-                      Portal oficial
-                    </a>
-                  </p>
-                </div>
-              ) : null}
-            </div>
-            <label>Tema</label>
-            <button type="button" className="ghost mini" onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))}>
-              {theme === "light" ? "Oscuro" : "Claro"}
-            </button>
-            {mode === "rag" ? (
-              <>
-                <label>Top K</label>
-                <input type="number" min={1} max={10} value={topK} onChange={(e) => setTopK(Number(e.target.value) || 4)} />
-              </>
-            ) : null}
+              <div className="composer-footer">
+                <span><kbd>↵</kbd> enviar <span className="shortcut-divider">·</span> <kbd>⇧ ↵</kbd> nueva línea</span>
+                <button type="submit" disabled={isSending || !input.trim() || !activeConversation?.id} aria-label="Enviar consulta"><Icon name="send" size={16} /></button>
+              </div>
+            </form>
+            <p className="composer-note">EnerCol puede equivocarse. Verifica siempre la norma citada.</p>
           </div>
+        </div>
+      </section>
 
-          <div className="stream-badge">Estado streaming: {streamStatus}</div>
-
-          <div className="message-list" ref={listRef}>
-            {messages.map((message) => (
-              <article key={message.id} className={`bubble ${message.role}`}>
-                <div className="meta-row">
-                  <p className="meta">{message.meta}</p>
-                  <span className="time">{message.time}</span>
-                </div>
-                <div className="content markdown-body">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
-                </div>
-                {message.role === "assistant" && message.references?.length ? (
-                  <div className="refs-box">
-                    <p className="refs-title">Referencias</p>
-                    {message.references.map((ref) => (
-                      <details key={ref.id} className="ref-item">
-                        <summary>
-                          {ref.label}
-                          {typeof ref.distance === "number" ? <span className="distance">score: {ref.distance.toFixed(4)}</span> : null}
-                        </summary>
-                        <div className="ref-chunk markdown-body">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{ref.chunk}</ReactMarkdown>
-                          <button type="button" className="ghost mini" onClick={() => void copyText(ref.chunk)}>
-                            Copiar chunk
-                          </button>
-                        </div>
-                      </details>
-                    ))}
-                  </div>
-                ) : null}
-              </article>
-            ))}
-            {isSending ? (
-              <article className="bubble assistant pending">
-                <p className="meta">Asistente</p>
-                <div className="typing" aria-label="Generando respuesta">
-                  <span />
-                  <span />
-                  <span />
-                </div>
-              </article>
-            ) : null}
-          </div>
-
-          <form className="composer" onSubmit={onSendMessage}>
-            <textarea
-              rows={3}
-              placeholder={mode === "rag" ? "Pregunta sobre documentos indexados..." : "Pregunta general sobre regulacion energetica..."}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-            />
-            <button type="submit" disabled={isSending}>
-              {isSending ? (
-                <span className="btn-inline">
-                  <span className="spinner" />
-                  Enviando...
-                </span>
-              ) : (
-                "Enviar"
-              )}
-            </button>
-          </form>
-        </section>
-
-        {showDocsPanel ? (
-          <aside className="docs-pane">
-          <div className="left-head">
-            <h2>Documentos Indexados</h2>
-            <button type="button" className="ghost mini" onClick={() => setShowDocsPanel(false)}>
-              Ocultar
-            </button>
-          </div>
-          <p className="aside-note">Sube documentos para consultas RAG con evidencia.</p>
-
-          <form className="upload-form" onSubmit={onUploadDocument}>
-            <input type="file" accept="application/pdf" onChange={(e) => setPdfFile(e.target.files?.[0] || null)} />
-            <button type="submit" disabled={isUploading}>
-              {isUploading ? (
-                <span className="btn-inline">
-                  <span className="spinner" />
-                  Procesando...
-                </span>
-              ) : (
-                "Subir PDF"
-              )}
-            </button>
-          </form>
-
-          <button className="ghost" type="button" onClick={() => void loadDocuments()}>
-            Actualizar listado
-          </button>
-
-          {sidebarStatus ? <p className="status">{sidebarStatus}</p> : null}
-
-          {isLoadingDocs ? (
-            <div className="doc-skeletons">
-              <div className="skeleton-item" />
-              <div className="skeleton-item" />
-              <div className="skeleton-item" />
-            </div>
-          ) : (
-            <div className="doc-list">
-              {documents.map((doc) => (
-                <article key={doc.document_id} className="doc-item">
-                  <p className="doc-name">{doc.filename}</p>
-                  <p className="doc-meta">{doc.chunks_indexed} chunks indexados</p>
-                </article>
-              ))}
-            </div>
-          )}
-          </aside>
-        ) : null}
-      </main>
-    </div>
+      {showSources && <SourceLibrary onClose={() => setShowSources(false)} />}
+      {showAccount && <AccountPanel user={user} onClose={() => setShowAccount(false)} onDeleted={onDeleteAccount} />}
+    </main>
   );
+}
+
+export default function App() {
+  const userQuery = useQuery({
+    queryKey: authQueryKey,
+    queryFn: authApi.me,
+    retry: (failureCount, error) => error.status !== 401 && failureCount < 2,
+  });
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    const onUnauthorized = () => {
+      queryClient.setQueryData(authQueryKey, null);
+      queryClient.removeQueries({ queryKey: conversationsQueryKey });
+      queryClient.removeQueries({ queryKey: ["documents"] });
+    };
+    const onStorage = (event) => {
+      if (event.key === AUTH_SYNC_KEY) void queryClient.invalidateQueries({ queryKey: authQueryKey });
+    };
+    window.addEventListener("enercol:unauthorized", onUnauthorized);
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener("enercol:unauthorized", onUnauthorized);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, [queryClient]);
+  if (userQuery.isLoading) return <AppLoading />;
+  if (userQuery.data) return <AuthenticatedWorkspace user={userQuery.data} />;
+  if (userQuery.error?.status === 401 || userQuery.data === null) return <AuthScreen />;
+  return <AppUnavailable onRetry={() => userQuery.refetch()} />;
 }

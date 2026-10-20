@@ -1,333 +1,138 @@
-# Energy Regulatory Copilot
+# EnerCol
 
-An AI-powered assistant specialized in Colombian energy regulatory matters. This application combines Retrieval-Augmented Generation (RAG) with large language models to provide accurate, context-aware answers about energy regulations.
+Espacio de investigación para consultar regulación energética colombiana y buscar dentro de documentos PDF propios. La interfaz guarda las conversaciones en el navegador; el índice documental se guarda en `backend/storage/chroma`.
 
-## Overview
+## Requisitos
 
-Energy Regulatory Copilot is a full-stack web application designed to help users understand and navigate Colombian energy regulations. It features:
+- Python 3.11–3.13
+- [`uv`](https://docs.astral.sh/uv/)
+- Node.js 18 o posterior y npm
+- Una API key de OpenRouter configurada solo en el backend
+- Una API key de Tavily para habilitar búsqueda web (opcional mientras se desarrolla)
 
-- **Conversational AI**: Ask natural language questions about energy regulations with chat history support
-- **Document Indexing**: Upload and index PDF documents (regulatory documents, guidelines, etc.)
-- **Retrieval-Augmented Generation (RAG)**: Query indexed documents with AI-powered semantic search
-- **Streaming Responses**: Real-time response streaming for improved user experience
-- **Multi-mode Chat**: Switch between general question answering and document-based RAG queries
+## Comandos rápidos
 
-## Architecture
+Desde la raíz del repositorio:
 
-### Backend
-- **Framework**: FastAPI (Python 3.11+)
-- **Vector Database**: Chroma (persistent vector storage for document embeddings)
-- **LLM Integration**: OpenRouter (compatible with OpenAI API)
-- **PDF Processing**: PyPDF for document parsing and chunking
-- **API Style**: RESTful with streaming support
+Primero configura `OPENROUTER_API_KEY` en `backend/.env` (ver abajo).
 
-### Frontend
-- **Framework**: React 18 with Vite
-- **Styling**: CSS
-- **Markdown Support**: React Markdown with GitHub Flavored Markdown
-- **State Management**: React Hooks (useState, useEffect, useMemo)
-
-## Prerequisites
-
-- Python 3.11 or higher
-- Node.js 18+ and npm
-- OpenRouter API key (for LLM access)
-- Docker and Docker Compose (optional, for containerized deployment)
-
-## Installation
-
-### Backend Setup
-
-1. Navigate to the backend directory:
 ```bash
-cd backend
+make setup   # instala dependencias Python y Node
+make dev     # levanta backend + frontend; Ctrl-C detiene ambos
+make help    # lista comandos disponibles
 ```
 
-2. Create a virtual environment:
+También están disponibles `make backend`, `make frontend`, `make health`, `make lint`,
+`make format`, `make build` y `make check`. Los puertos se pueden cambiar, por ejemplo:
+
 ```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+make dev API_PORT=8010 WEB_PORT=5180
 ```
 
-3. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
+## Configurar el backend
 
-4. Create a `.env` file in the backend root with your configuration:
-```env
-OPENROUTER_API_KEY=your_api_key_here
+El archivo local `backend/.env` contiene la configuración del servidor. No copies la API key al frontend ni la publiques en el repositorio.
+
+```dotenv
+OPENROUTER_API_KEY=tu_api_key
 OPENROUTER_CHAT_MODEL=openrouter/free
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 OPENROUTER_EMBEDDING_MODEL=nvidia/llama-nemotron-embed-vl-1b-v2:free
-VECTOR_DB_PATH=./storage/chroma
-LOG_LEVEL=INFO
+TAVILY_API_KEY=
+DATABASE_PATH=storage/enercol.db
+SESSION_TTL_DAYS=30
+SESSION_COOKIE_SECURE=false
 ```
 
-5. Run the backend server:
+El modelo configurado debe admitir llamadas a herramientas. Sin `TAVILY_API_KEY`, la búsqueda web
+queda deshabilitada; el agente debe indicar cuándo no pudo verificar un dato y no inventar detalles.
+
+Las cuentas, sesiones y conversaciones se guardan en SQLite en `backend/storage/enercol.db`.
+Alembic aplica migraciones al iniciar el backend. Cada sesión usa una cookie `HttpOnly`; cada usuario
+solo puede consultar sus conversaciones y sus documentos. En despliegues HTTPS configura
+`SESSION_COOKIE_SECURE=true` y `ALLOWED_ORIGINS` con el dominio exacto del frontend.
+
+El prototipo incluye registro, inicio/cierre de sesión, edición de nombre y correo, cambio de
+contraseña y eliminación de cuenta con sus datos. No incluye todavía verificación de correo ni
+recuperación de contraseña: ambas funciones requieren un proveedor de correo transaccional. Antes de
+abrir el registro al público, añade límites de intentos en el borde de red y define los términos,
+política de privacidad y canal de soporte del producto.
+
+Desde la carpeta `backend`:
+
 ```bash
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+uv sync --group dev
+uv run fastapi dev --host 127.0.0.1 --port 8000
 ```
 
-### Frontend Setup
+La documentación interactiva de la API está en `http://127.0.0.1:8000/docs`.
 
-1. Navigate to the frontend directory:
-```bash
-cd frontend
-```
+## Configurar el frontend
 
-2. Install dependencies:
-```bash
-npm install
-```
+`frontend/.env.local` puede indicar la URL del backend:
 
-3. Start the development server:
-```bash
-npm run dev
-```
-
-4. Configure frontend environment variables:
-```bash
-# frontend/.env.local
+```dotenv
 VITE_API_BASE_URL=http://localhost:8000/api/v1
 ```
 
-The frontend will be available at `http://localhost:5173` (or another port if 5173 is in use).
+Desde `frontend`:
 
-## Configuration
-
-### Backend Configuration
-
-All backend settings are managed through environment variables and can be customized in `backend/app/core/config.py`:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PROJECT_NAME` | Energy Regulatory Copilot API | Application title |
-| `VERSION` | 0.1.0 | API version |
-| `API_V1_PREFIX` | /api/v1 | API endpoint prefix |
-| `OPENROUTER_API_KEY` | (empty) | **Required**: Your OpenRouter API key |
-| `OPENROUTER_CHAT_MODEL` | openrouter/free | LLM model for chat responses |
-| `OPENROUTER_EMBEDDING_MODEL` | nvidia/llama-nemotron-embed-vl-1b-v2:free | Model for generating document embeddings |
-| `VECTOR_DB_PATH` | ./storage/chroma | Path to vector database storage |
-| `VECTOR_COLLECTION_NAME` | regulatory_documents | Name of the vector collection |
-| `RAG_CHUNK_SIZE` | 900 | Size of document chunks (characters) |
-| `RAG_CHUNK_OVERLAP` | 200 | Overlap between consecutive chunks |
-| `LOG_LEVEL` | INFO | Logging verbosity (DEBUG, INFO, WARNING, ERROR) |
-| `ALLOWED_ORIGINS` | localhost:3000, 127.0.0.1:3000 | CORS allowed origins |
-
-### CORS Configuration
-
-For production deployments, update `ALLOWED_ORIGINS` in the `.env` file to include your frontend domain.
-
-## API Endpoints
-
-### Health Check
-- **GET** `/api/v1/health`
-  - Returns application status
-
-### Questions (General Q&A)
-- **POST** `/api/v1/questions/ask`
-  - Answer general questions about energy regulations
-  - Request: `{ "question": "string", "history": [] }`
-  - Response: `{ "answer": "string", "model": "string" }`
-
-- **POST** `/api/v1/questions/ask/stream`
-  - Streaming endpoint for real-time responses
-  - Returns Server-Sent Events (SSE) stream
-
-### RAG (Document-Based Q&A)
-- **POST** `/api/v1/rag/documents/upload`
-  - Upload and index a PDF document
-  - Requires: PDF file upload, optional OpenRouter API key header
-  - Response: `{ "document_id": "uuid", "chunks_indexed": int, "filename": "string" }`
-
-- **POST** `/api/v1/rag/question`
-  - Query indexed documents
-  - Request: `{ "question": "string", "api_key_override": "string" }`
-  - Response: `{ "answer": "string", "sources": [...], "model": "string" }`
-
-- **POST** `/api/v1/rag/question/stream`
-  - Streaming document-based Q&A
-
-- **GET** `/api/v1/rag/documents`
-  - List all indexed documents
-  - Response: `{ "documents": [IndexedDocument], "total": int }`
-
-## Usage
-
-### General Workflow
-
-1. **Start Services**:
-   - Backend: `uvicorn app.main:app --reload`
-   - Frontend: `npm run dev`
-
-2. **Access the Application**:
-   - Open `http://localhost:5173` in your browser
-
-3. **Chat Interface**:
-   - Type questions about energy regulations
-   - Switch between "Ask" mode (general Q&A) and "RAG" mode (document-based)
-
-4. **Document Upload** (RAG Mode):
-   - Click "Upload Document" to add PDF files
-   - Wait for indexing to complete
-   - Query the uploaded documents in RAG mode
-
-### Example Questions
-
-- "What are the main Colombian energy regulations?"
-- "Explain the renewable energy incentives in Colombia"
-- (In RAG mode with uploaded documents): "What does the document say about tariffs?"
-
-## Project Structure
-
-```
-EnergyRegulatoryCopilot/
-├── backend/
-│   ├── app/
-│   │   ├── api/v1/
-│   │   │   ├── endpoints/
-│   │   │   │   ├── health.py      # Health check endpoint
-│   │   │   │   ├── questions.py   # General Q&A endpoints
-│   │   │   │   └── rag.py         # RAG endpoints
-│   │   │   └── router.py          # API router configuration
-│   │   ├── services/
-│   │   │   ├── question_service.py  # Q&A logic
-│   │   │   └── rag_service.py       # RAG/document handling
-│   │   ├── schemas/
-│   │   │   ├── questions.py       # Request/response models
-│   │   │   └── rag.py             # RAG models
-│   │   ├── core/
-│   │   │   ├── config.py          # Configuration settings
-│   │   │   └── logging_config.py  # Logging setup
-│   │   └── main.py                # FastAPI app initialization
-│   ├── requirements.txt           # Python dependencies
-│   └── storage/
-│       └── chroma/                # Vector database storage
-├── frontend/
-│   ├── src/
-│   │   ├── App.jsx                # Main React component
-│   │   ├── main.jsx               # React entry point
-│   │   └── styles.css             # Application styles
-│   ├── package.json               # NPM dependencies
-│   ├── vite.config.js             # Vite configuration
-│   └── index.html                 # HTML template
-├── docker-compose.yml             # Docker orchestration
-└── README.md                      # This file
-```
-
-## Dependencies
-
-### Backend
-- **fastapi**: Web framework
-- **uvicorn**: ASGI server
-- **pydantic**: Data validation
-- **chromadb**: Vector database
-- **openai**: LLM client (OpenRouter compatible)
-- **pypdf**: PDF parsing
-
-### Frontend
-- **react**: UI framework
-- **react-dom**: DOM rendering
-- **react-markdown**: Markdown rendering
-- **remark-gfm**: GitHub Flavored Markdown support
-- **vite**: Build tool
-
-## Development
-
-### Code Style
-The project uses Python and JavaScript conventions. Consider using:
-- **Backend**: Black for formatting, flake8/ruff for linting
-- **Frontend**: ESLint, Prettier
-
-### Debugging
-
-**Backend**:
-- Set `LOG_LEVEL=DEBUG` in `.env`
-- Check logs in console output
-- Use FastAPI interactive docs: `http://localhost:8000/docs`
-
-**Frontend**:
-- Open browser DevTools (F12)
-- Check Network tab for API requests
-- Use React DevTools browser extension
-
-## Deployment
-
-### Vercel Environment Variables
-
-For Vercel deployments, configure `VITE_API_BASE_URL` in:
-- **Project Settings → Environment Variables**
-
-Vercel manages environment variables per project and per environment (Development, Preview, Production).
-
-### Docker
-
-Build and run with Docker Compose:
 ```bash
-docker-compose up --build
+npm install
+npm run dev
 ```
 
-Update `docker-compose.yml` with appropriate environment variables and port mappings.
+Vite muestra la dirección local al iniciar. Para desplegar, define `VITE_API_BASE_URL` con la URL pública de la API y configura en el backend los orígenes permitidos en `ALLOWED_ORIGINS`.
 
-### Production Considerations
+## Configuración del backend
 
-1. **API Keys**: Use secure environment variable management (AWS Secrets, HashiCorp Vault, etc.)
-2. **CORS**: Update `ALLOWED_ORIGINS` for your production domain
-3. **Database**: Configure persistent storage for Chroma
-4. **Rate Limiting**: Implement API rate limiting to prevent abuse
-5. **Monitoring**: Set up logging and error tracking (Sentry, CloudWatch, etc.)
-6. **HTTPS**: Ensure all communication uses HTTPS
+Las opciones se definen en `backend/app/core/config.py` y pueden sobrescribirse desde `backend/.env`:
 
-## Troubleshooting
+| Variable | Valor inicial | Uso |
+| --- | --- | --- |
+| `OPENROUTER_API_KEY` | — | Credencial privada del proveedor |
+| `OPENROUTER_CHAT_MODEL` | `openrouter/free` | Modelo de conversación |
+| `OPENROUTER_EMBEDDING_MODEL` | `nvidia/llama-nemotron-embed-vl-1b-v2:free` | Modelo de embeddings |
+| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | API compatible con OpenAI |
+| `TAVILY_API_KEY` | — | Clave privada opcional para búsqueda web |
+| `DATABASE_PATH` | `backend/storage/enercol.db` | Base de datos local de cuentas y conversaciones |
+| `SESSION_TTL_DAYS` | `30` | Duración máxima de una sesión |
+| `SESSION_COOKIE_SECURE` | `false` | Requiere HTTPS para enviar la cookie |
+| `VECTOR_DB_PATH` | `backend/storage/chroma` | Índice persistente de documentos |
+| `VECTOR_COLLECTION_NAME` | `regulatory_documents` | Colección vectorial |
+| `RAG_CHUNK_SIZE` | `900` | Tamaño de fragmentos en caracteres |
+| `RAG_CHUNK_OVERLAP` | `160` | Solapamiento entre fragmentos |
+| `MAX_UPLOAD_BYTES` | `26214400` | Máximo de carga (25 MiB) |
+| `ALLOWED_ORIGINS` | `http://localhost:5173`, `http://127.0.0.1:5173` | Orígenes CORS explícitos |
+| `LOG_LEVEL` | `INFO` | Nivel de logs |
 
-### Common Issues
+## API
 
-**Backend won't start**:
-- Ensure `OPENROUTER_API_KEY` is set
-- Check Python version: `python --version` (should be 3.11+)
-- Verify port 8000 is available
+- `GET /api/v1/health`
+- `POST /api/v1/auth/register` y `POST /api/v1/auth/login` — crear cuenta e iniciar sesión
+- `POST /api/v1/auth/logout`, `GET /api/v1/auth/me`, `PATCH /api/v1/auth/me`
+- `POST /api/v1/auth/password`, `DELETE /api/v1/auth/me`
+- `GET /api/v1/conversations`, `POST /api/v1/conversations`, `GET /api/v1/conversations/{id}/messages`
+- `POST /api/v1/agent/stream` — investigación unificada con actividad, respuesta y auditoría SSE
+- `GET /api/v1/sources` — lista de PDFs indexados
+- `POST /api/v1/sources` — carga e indexación de un PDF
 
-**Frontend can't reach backend**:
-- Ensure backend is running on `http://localhost:8000`
-- Check CORS configuration in backend
-- Verify API key header format in requests
+Las cargas aceptan PDFs de hasta 25 MiB con texto seleccionable. El índice Chroma actual parte vacío;
+vuelve a cargar los PDFs para incorporarlos. La recuperación y orquestación usan LlamaIndex; cada
+respuesta incluye las búsquedas realizadas, citas y fragmentos de evidencia. Los PDFs llevan un hash
+SHA-256 para verificar el archivo indexado. La búsqueda web usa Tavily cuando se configura su clave.
 
-**Document upload fails**:
-- Ensure PDF is not corrupted
-- Check file size isn't excessive
-- Verify OpenRouter API key is valid
+## Estructura
 
-**Responses are slow**:
-- Check OpenRouter API status
-- Monitor system resources (CPU, memory)
-- Consider adjusting chunk size for RAG
-
-## License
-
-This project is licensed under the MIT License. See [LICENSE.md](LICENSE.md) for details.
-
-## Contributing
-
-Contributions are welcome! Please:
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
-
-## Support
-
-For issues, questions, or suggestions:
-- Create an issue in the repository
-- Check existing documentation
-- Review API documentation at `http://localhost:8000/docs`
-
-## Roadmap
-
-- [ ] User authentication and authorization
-- [ ] Document management (delete, update)
-- [ ] Advanced search filters
-- [ ] Export chat history
-- [ ] Multiple language support
-- [ ] Performance optimizations
-- [ ] Comprehensive test suite
+```text
+backend/
+  app/
+    api/              Rutas y dependencias FastAPI
+    core/             Configuración y logging
+    schemas/           Request, source, answer and audit models
+    services/          Agent orchestration, document indexing and retrieval
+  pyproject.toml      Dependencias, configuración de uv y Ruff
+  uv.lock             Resolución reproducible
+frontend/
+  src/                Aplicación React y estilos
+```
