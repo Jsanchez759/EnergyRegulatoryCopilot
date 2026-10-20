@@ -41,11 +41,11 @@ button { color: inherit; }
 .workspace {
   min-height: 100vh;
   display: grid;
-  grid-template-columns: 244px minmax(460px, 1fr) 322px;
+  grid-template-columns: var(--history-width, 260px) minmax(460px, 1fr) 322px;
   background: var(--paper);
   animation: workspace-in 380ms ease-out both;
 }
-.workspace.sources-hidden { grid-template-columns: 244px minmax(0, 1fr); }
+.workspace.sources-hidden { grid-template-columns: var(--history-width, 260px) minmax(0, 1fr); }
 .workspace.history-hidden { grid-template-columns: minmax(0, 1fr) 322px; }
 .workspace.history-hidden.sources-hidden { grid-template-columns: minmax(0, 1fr); }
 
@@ -88,8 +88,7 @@ button { color: inherit; }
 .conversation-row:hover, .conversation-row.is-active { background: color-mix(in srgb, var(--accent-soft) 72%, transparent); }
 .conversation-select { min-width: 0; height: 36px; display: flex; align-items: center; flex: 1; gap: 9px; padding: 0 8px; border: 0; background: transparent; text-align: left; color: var(--muted); font-size: 11px; cursor: pointer; }
 .conversation-row.is-active .conversation-select { color: var(--ink); font-weight: 600; }
-.conversation-select:not(:hover) { overflow: hidden; }
-.conversation-select { white-space: nowrap; text-overflow: ellipsis; }
+.conversation-title { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .conversation-dot { flex: 0 0 5px; width: 5px; height: 5px; border: 1px solid #9ca89f; border-radius: 50%; }
 .conversation-row.is-active .conversation-dot { border-color: var(--accent); background: var(--accent); }
 .conversation-delete { width: 25px; height: 25px; margin-right: 5px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 17px; opacity: 0; cursor: pointer; }
@@ -318,8 +317,8 @@ kbd { padding: 2px 4px; border: 1px solid var(--line); border-radius: 3px; backg
 @keyframes thinking { 50% { opacity: .28; transform: translateY(-2px); } }
 
 @media (max-width: 1180px) {
-  .workspace { grid-template-columns: 220px minmax(400px, 1fr) 290px; }
-  .workspace.sources-hidden { grid-template-columns: 220px minmax(0, 1fr); }
+  .workspace { grid-template-columns: var(--history-width, 220px) minmax(400px, 1fr) 290px; }
+  .workspace.sources-hidden { grid-template-columns: var(--history-width, 220px) minmax(0, 1fr); }
   .workspace.history-hidden { grid-template-columns: minmax(0, 1fr) 290px; }
   .workspace.history-hidden.sources-hidden { grid-template-columns: minmax(0, 1fr); }
   .history-pane { padding-right: 13px; padding-left: 13px; }
@@ -330,9 +329,9 @@ kbd { padding: 2px 4px; border: 1px solid var(--line); border-radius: 3px; backg
   .composer-wrap { padding-right: 30px; padding-left: 30px; }
 }
 @media (max-width: 1020px) {
-  .workspace { grid-template-columns: 220px minmax(0, 1fr); }
+  .workspace { grid-template-columns: var(--history-width, 220px) minmax(0, 1fr); }
   .workspace.history-hidden { grid-template-columns: minmax(0, 1fr); }
-  .workspace.sources-hidden { grid-template-columns: 220px minmax(0, 1fr); }
+  .workspace.sources-hidden { grid-template-columns: var(--history-width, 220px) minmax(0, 1fr); }
   .workspace.history-hidden.sources-hidden { grid-template-columns: minmax(0, 1fr); }
   .sources-pane { display: none; }
   .sources-pane.is-open { width: min(340px, 92vw); height: 100dvh; position: fixed; z-index: 12; top: 0; right: 0; display: block; box-shadow: -10px 0 32px rgba(20, 40, 28, .12); }
@@ -491,4 +490,13 @@ kbd { padding: 2px 4px; border: 1px solid var(--line); border-radius: 3px; backg
   .auth-secure-note { right: 24px; bottom: 19px; }
   .conversation-search { min-height: 40px; }
   .export-button { padding: 0 7px; font-size: 11px; }
+}
+
+.history-resize-handle { position: absolute; top: 0; right: -4px; z-index: 2; width: 8px; height: 100%; cursor: col-resize; touch-action: none; outline: none; }
+.history-resize-handle::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; background: transparent; transition: background .15s ease; }
+.history-resize-handle:hover::after, .history-resize-handle:focus-visible::after, .workspace.is-resizing .history-resize-handle::after { background: var(--accent); }
+.workspace.is-resizing { cursor: col-resize; user-select: none; }
+.workspace.is-resizing * { cursor: col-resize !important; }
+@media (max-width: 700px) {
+  .history-resize-handle { display: none; }
 }

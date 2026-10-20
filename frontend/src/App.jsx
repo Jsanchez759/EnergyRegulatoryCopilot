@@ -18,9 +18,11 @@ import { useDocuments } from "./features/documents/queries";
 import SourceLibrary from "./features/documents/SourceLibrary";
 import { API_BASE_URL, requestJson } from "./lib/api";
 import Icon from "./shared/Icon";
+import useResizableWidth from "./shared/useResizableWidth";
 
 const THEME_STORAGE_KEY = "enercol_theme_v1";
 const AUTH_SYNC_KEY = "enercol_auth_changed";
+const HISTORY_WIDTH_STORAGE_KEY = "enercol_history_width_v1";
 const STARTERS = [
   "¿Qué establece la regulación sobre autogeneración?",
   "Resume las reglas para conectar un proyecto solar.",
@@ -86,6 +88,12 @@ function AuthenticatedWorkspace({ user }) {
   const [showSources, setShowSources] = useState(() => !window.matchMedia("(max-width: 1020px)").matches);
   const [showAccount, setShowAccount] = useState(false);
   const [appError, setAppError] = useState("");
+  const historyResize = useResizableWidth({
+    storageKey: HISTORY_WIDTH_STORAGE_KEY,
+    defaultWidth: 260,
+    minWidth: 200,
+    maxWidth: 480,
+  });
   const messagesEndRef = useRef(null);
   const searchInputRef = useRef(null);
   const initialConversationStarted = useRef(false);
@@ -295,7 +303,10 @@ function AuthenticatedWorkspace({ user }) {
   }
 
   return (
-    <main className={`workspace ${!showHistory ? "history-hidden" : ""} ${!showSources ? "sources-hidden" : ""}`}>
+    <main
+      className={`workspace ${!showHistory ? "history-hidden" : ""} ${!showSources ? "sources-hidden" : ""} ${historyResize.isResizing ? "is-resizing" : ""}`}
+      style={{ "--history-width": `${historyResize.width}px` }}
+    >
       {showHistory && <aside className="history-pane" aria-label="Conversaciones">
         <a className="brand" href="#inicio" aria-label="EnerCol inicio">
           <span className="brand-mark"><span /><span /><span /></span><span>enercol<span className="brand-period">.</span></span>
@@ -321,7 +332,7 @@ function AuthenticatedWorkspace({ user }) {
         <nav className="conversation-list">
           {conversations.map((conversation) => <div key={conversation.id} className={`conversation-row ${conversation.id === activeConversation?.id ? "is-active" : ""}`}>
             <button type="button" className="conversation-select" onClick={() => setActiveConversationId(conversation.id)} title={conversation.title}>
-              <span className="conversation-dot" />{conversation.title}
+              <span className="conversation-dot" /><span className="conversation-title">{conversation.title}</span>
             </button>
             <button className="conversation-delete" type="button" onClick={() => void removeConversation(conversation.id)} aria-label={`Eliminar ${conversation.title}`} title="Eliminar">×</button>
           </div>)}
@@ -334,6 +345,7 @@ function AuthenticatedWorkspace({ user }) {
             <Icon name="sun" size={16} /> Apariencia <span>{theme === "light" ? "Claro" : "Oscuro"}</span>
           </button>
         </div>
+        <div className="history-resize-handle" aria-label="Ajustar ancho del panel de conversaciones" title="Arrastra para ajustar · doble clic para restablecer" {...historyResize.handleProps} />
       </aside>}
 
       <section className="research-pane">
