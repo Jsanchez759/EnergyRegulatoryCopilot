@@ -11,6 +11,7 @@ const CorpusLayout = lazy(() => import("./features/corpus/CorpusLayout"));
 const MonitorPage = lazy(() => import("./features/corpus/MonitorPage"));
 const NormsPage = lazy(() => import("./features/corpus/NormsPage"));
 const NormPage = lazy(() => import("./features/corpus/NormPage"));
+const MarketPage = lazy(() => import("./features/market/MarketPage"));
 
 function AppLoading() {
   return <main className="app-loading"><span className="brand-mark"><span /><span /><span /></span><span>Preparando EnerCol…</span></main>;
@@ -29,6 +30,7 @@ function AuthenticatedApp({ user }) {
           <Route path="/monitor" element={<MonitorPage />} />
           <Route path="/normativa" element={<NormsPage />} />
           <Route path="/normativa/:normId" element={<NormPage />} />
+          <Route path="/mercado" element={<MarketPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

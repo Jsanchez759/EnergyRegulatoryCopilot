@@ -12,6 +12,7 @@ from app.services.agent_service import AgentService
 from app.services.auth_service import AuthenticatedUser, current_session
 from app.services.corpus_service import CorpusService
 from app.services.document_service import DocumentService
+from app.services.market_service import MarketService
 
 DbSessionDep = Annotated[AsyncSession, Depends(get_db_session)]
 
@@ -42,6 +43,10 @@ def get_corpus_service(request: Request) -> CorpusService:
     return request.app.state.corpus_service
 
 
+def get_market_service(request: Request) -> MarketService:
+    return request.app.state.market_service
+
+
 def get_storage(request: Request) -> BlobStorage:
     return request.app.state.storage
 
@@ -49,6 +54,7 @@ def get_storage(request: Request) -> BlobStorage:
 AgentServiceDep = Annotated[AgentService, Depends(get_agent_service)]
 CorpusServiceDep = Annotated[CorpusService, Depends(get_corpus_service)]
 StorageDep = Annotated[BlobStorage, Depends(get_storage)]
+MarketServiceDep = Annotated[MarketService, Depends(get_market_service)]
 DocumentServiceDep = Annotated[DocumentService, Depends(get_document_service)]
 
 

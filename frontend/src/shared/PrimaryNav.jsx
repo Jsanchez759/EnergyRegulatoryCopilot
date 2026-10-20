@@ -4,6 +4,7 @@ const LINKS = [
   { to: "/", label: "Investigación", end: true },
   { to: "/monitor", label: "Monitor regulatorio" },
   { to: "/normativa", label: "Normativa" },
+  { to: "/mercado", label: "Mercado" },
 ];
 
 export default function PrimaryNav() {

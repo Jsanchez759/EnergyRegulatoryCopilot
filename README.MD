@@ -108,6 +108,12 @@ tecnología, embalses, aportes, contratos, intercambios y emisiones.
   la muestra como gráfico con la tabla de datos. Se guarda con la conversación.
 - **Caché en memoria:** el catálogo y las listas de códigos se refrescan a diario; las series viven
   entre 1 y 12 horas según su granularidad. No hay tablas nuevas en la base de datos.
+- **Página Mercado (`/mercado`):** indicadores del día (precio de bolsa y de escasez, embalses,
+  aportes, demanda) con su tendencia de 30 días; un constructor de gráficas (cualquier métrica del
+  catálogo, por sistema, planta, agente, embalse o río, o por tecnología, con atajos de periodo);
+  un lienzo con varias gráficas en líneas, barras o apiladas, que se pueden combinar y exportar a
+  CSV; y el asistente al lado, cuyas series aparecen en el lienzo y que puede leer lo que hay en
+  él ("Preguntar" sobre una gráfica). El lienzo y el chat se guardan en el navegador.
 - SIMEM y un histórico propio de series clave quedan para fases siguientes.
 
 ## Datos
@@ -157,7 +163,7 @@ Las opciones se definen en `backend/app/core/config.py` y se sobrescriben desde 
 | `DATABASE_URL` | `postgresql+asyncpg://enercol:enercol@localhost:5432/enercol` | Conexión a Postgres |
 | `DATABASE_POOL_SIZE` / `DATABASE_MAX_OVERFLOW` | `5` / `10` | Pool de conexiones por proceso |
 | `OPENROUTER_API_KEY` | — | Credencial privada del proveedor |
-| `OPENROUTER_CHAT_MODEL` | `amazon/nova-micro-v1` | Modelo de conversación (debe admitir herramientas) |
+| `OPENROUTER_CHAT_MODEL` | `anthropic/claude-haiku-5.5` | Modelo de conversación (debe admitir herramientas) |
 | `OPENROUTER_EMBEDDING_MODEL` | `perplexity/pplx-embed-v1-0.6b` | Modelo de embeddings (multilingüe) |
 | `EMBEDDING_DIMENSIONS` | `1024` | Debe coincidir con la columna creada por las migraciones |
 | `TAVILY_API_KEY` | — | Búsqueda web; sin ella el agente indica que no pudo verificar |
@@ -182,6 +188,7 @@ Las opciones se definen en `backend/app/core/config.py` y se sobrescriben desde 
 | `OCR_LANGUAGE` / `OCR_MIN_CHARS_PER_PAGE` | `spa` / `200` | OCR con Tesseract para PDF escaneados |
 | `OCR_MAX_PAGES` | `40` | Páginas máximas por documento con OCR |
 | `XM_API_URL` / `XM_TIMEOUT_SECONDS` | `https://servapibi.xm.com.co` / `30` | API de datos de XM |
+| `RATE_LIMIT_MARKET` | `60/minute;2000/day` | Consultas de series de mercado, por usuario |
 | `MARKET_MAX_RANGE_DAYS` | `366` | Rango máximo de una consulta horaria o diaria (×3 para mensuales) |
 | `AGENT_MAX_ITERATIONS` | `6` | Pasos máximos del agente por pregunta |
 
@@ -211,6 +218,11 @@ frontend a `ALLOWED_ORIGINS`.
 - `GET /api/v1/corpus/search?q=`: búsqueda híbrida por artículo
 - `GET /api/v1/corpus/events`: feed de cambios; `GET /api/v1/corpus/status`: salud por fuente
 - `GET /api/v1/corpus/files/{id}`: archivo original (PDF o DOCX)
+- `GET /api/v1/market/metrics[?q=]`, `GET /api/v1/market/codes?entity=&q=`: catálogo de XM y
+  códigos de plantas, agentes, embalses y ríos
+- `GET /api/v1/market/series?metric_id=&start=&end=[&entity=&codes=&group_by_technology=]`:
+  serie agregada lista para graficar; `GET /api/v1/market/overview`: indicadores del día
+- `POST /api/v1/market/assistant`: asistente de mercado por SSE, sin conversación guardada
 
 Las respuestas 429 incluyen `Retry-After`.
 
@@ -222,13 +234,14 @@ Las respuestas 429 incluyen `Retry-After`.
   se extrae. MinEnergía sí lo publica y se muestra.
 - El normograma de MinEnergía no indica qué norma deroga a otra, solo el estado; las relaciones
   de MinEnergía salen de los títulos y no cubren modificaciones mencionadas solo en el articulado.
-- Los modelos por defecto son los más baratos que respondieron con fuentes y citas en todas las
-  preguntas de prueba (unos 0,0003 USD por consulta). Los modelos gratuitos de OpenRouter no sirven:
+- Los modelos gratuitos de OpenRouter no sirven:
   bloquean llamadas al azar y limitan a 20 solicitudes por minuto.
 - No hay verificación de correo ni recuperación de contraseña todavía.
-- Con el modelo por defecto, las preguntas de mercado a veces fallan: el modelo omite un filtro o
-  inventa un id de métrica. El servicio corrige los ids aproximados y nombra cada serie, pero un
-  modelo más capaz reduce estos errores.
+- El modelo por defecto salió de comparar cinco modelos baratos con las mismas preguntas de
+  mercado y normativa. `amazon/nova-micro-v1` etiquetaba mal las series (presentaba la generación
+  total como solar), y Qwen y DeepSeek fallaron en una pregunta cada uno. GLM 5.3 Flash acertó,
+  pero sus seguimientos tardaron de 33 a 86 s, al borde del límite de 90 s. Claude Haiku 5.5
+  acertó en todo y respondió en 15 a 19 s, por unos 0,002 USD por consulta.
 
 ## Estructura
 

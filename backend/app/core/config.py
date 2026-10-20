@@ -23,7 +23,7 @@ class Settings(BaseSettings):
 
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
     OPENROUTER_API_KEY: str = Field(default="", repr=False)
-    OPENROUTER_CHAT_MODEL: str = "amazon/nova-micro-v1"
+    OPENROUTER_CHAT_MODEL: str = "anthropic/claude-haiku-5.5"
     OPENROUTER_EMBEDDING_MODEL: str = "perplexity/pplx-embed-v1-0.6b"
     TAVILY_API_KEY: str = Field(default="", repr=False)
 
@@ -76,6 +76,8 @@ class Settings(BaseSettings):
     RATE_LIMIT_AUTH: str = "10/minute;50/hour"
     RATE_LIMIT_AGENT: str = "15/minute;300/day"
     RATE_LIMIT_UPLOAD: str = "20/hour"
+    # Each series request may fan out to several XM calls (cached), so this is per user.
+    RATE_LIMIT_MARKET: str = "60/minute;2000/day"
 
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: Literal["json", "console"] | None = None

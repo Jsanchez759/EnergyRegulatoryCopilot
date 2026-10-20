@@ -15,7 +15,7 @@ import {
 import { consumeSseResponse } from "../chat/stream";
 import { useDocuments } from "../documents/queries";
 import SourceLibrary from "../documents/SourceLibrary";
-import MarketChart from "./MarketChart";
+import MarketChart from "../market/MarketChart";
 import { combineMarketSources } from "./marketSources";
 import { API_BASE_URL } from "../../lib/api";
 import Icon from "../../shared/Icon";

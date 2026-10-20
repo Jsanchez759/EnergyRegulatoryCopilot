@@ -131,6 +131,14 @@ def test_energy_by_resource_adds_hours_and_names_plants() -> None:
     assert guavio["total"] == guavio["dia_maximo"].split(" ")[0], "one day: its total is the day"
     assert "hora_maxima" in guavio
     assert series.request["Filter"] == ["GVIO", "TBST"]
+    assert series.chart()["query"] == {
+        "metric_id": "Gene",
+        "entity": "Recurso",
+        "start": "2026-10-01",
+        "end": "2026-10-01",
+        "codes": ["GVIO", "TBST"],
+        "group_by_technology": False,
+    }
 
 
 def test_empty_hours_keep_the_others_in_place() -> None:
@@ -217,3 +225,24 @@ def test_guessed_ids_resolve_to_the_closest_metric_of_the_same_entity() -> None:
     assert series.metric.metric_id == "Gene"
     assert series.rows
     assert "'generacion' no es un id de XM" in series.summary_text()
+
+
+def test_a_partially_published_last_day_is_not_summed() -> None:
+    def day(date_text, hours):
+        return {
+            "Date": date_text,
+            "HourlyEntities": [
+                {
+                    "Id": "Sistema",
+                    "Values": {
+                        "code": "Sistema",
+                        **{f"Hour{hour:02d}": "1000" for hour in range(1, hours + 1)},
+                    },
+                }
+            ],
+        }
+
+    payload = {"Items": [day("2026-10-16", 24), day("2026-10-17", 24), day("2026-10-18", 6)]}
+    xm = service(FakeXM({("hourly", "DemaReal"): payload}))
+    series = run(xm.series("DemaReal", date(2026, 10, 16), date(2026, 10, 18)))
+    assert [label for label, _ in series.rows] == ["2026-10-16", "2026-10-17"]

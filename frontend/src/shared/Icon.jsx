@@ -16,6 +16,8 @@ export default function Icon({ name, size = 18 }) {
     arrow: <><path d="M5 12h14M13 6l6 6-6 6" /></>,
     lock: <><rect x="4" y="10" width="16" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 5v2" /></>,
     search: <><circle cx="10.8" cy="10.8" r="6.8" /><path d="m16 16 4.5 4.5" /></>,
+    chart: <><path d="M4 4v16h16" /><path d="m7 15 4-5 3 3 5-6" /></>,
+    spark: <><path d="M12 3v4m0 10v4M3 12h4m10 0h4M6.3 6.3l2.8 2.8m5.8 5.8 2.8 2.8m0-11.4-2.8 2.8m-5.8 5.8-2.8 2.8" /></>,
   };
   return (
     <svg {...common} stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">

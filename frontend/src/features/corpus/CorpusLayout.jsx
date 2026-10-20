@@ -8,7 +8,7 @@ import PrimaryNav, { BrandLink } from "../../shared/PrimaryNav";
 import useResizableWidth from "../../shared/useResizableWidth";
 import useTheme from "../../shared/useTheme";
 
-const SECTION_TITLES = { "/monitor": "Monitor regulatorio", "/normativa": "Normativa" };
+const SECTION_TITLES = { "/monitor": "Monitor regulatorio", "/normativa": "Normativa", "/mercado": "Mercado eléctrico" };
 
 function SourceHealth() {
   const catalog = useSourceCatalog();
@@ -44,17 +44,22 @@ export default function CorpusLayout({ user }) {
     minWidth: 200,
     maxWidth: 480,
   });
-  const section = location.pathname.startsWith("/normativa") ? "/normativa" : "/monitor";
+  const section = ["/normativa", "/mercado"].find((path) => location.pathname.startsWith(path)) || "/monitor";
 
   return (
     <main
-      className={`corpus-layout ${sidebar.isResizing ? "is-resizing" : ""}`}
+      className={`corpus-layout ${section === "/mercado" ? "is-wide" : ""} ${sidebar.isResizing ? "is-resizing" : ""}`}
       style={{ "--history-width": `${sidebar.width}px` }}
     >
       <aside className="history-pane" aria-label="Navegación">
         <BrandLink />
         <PrimaryNav />
-        <SourceHealth />
+        {section === "/mercado"
+          ? <section className="source-health" aria-label="Fuente de datos">
+            <div className="sidebar-label">Fuente</div>
+            <div className="source-health-row"><span className="source-health-dot is-ok" /><div><strong>XM · Sinergox</strong><small>Datos en vivo, con cerca de un día de rezago</small></div></div>
+          </section>
+          : <SourceHealth />}
         <div className="sidebar-bottom">
           <div className="sidebar-caption">Monitor regulatorio</div>
           <div className="sidebar-subcaption">Sector eléctrico · Colombia</div>

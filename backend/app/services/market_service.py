@@ -60,6 +60,14 @@ PREFERRED_METRICS = {
     ("PorcApor", "Sistema"): "aportes hídricos como % de la media histórica",
     ("factorEmisionCO2e", "Sistema"): "factor de emisión de CO2 equivalente del SIN",
 }
+OVERVIEW = (
+    ("precio_bolsa", "Precio de bolsa", "PPPrecBolsNaci", "Sistema"),
+    ("precio_escasez", "Precio de escasez", "PrecEsca", "Sistema"),
+    ("embalses", "Nivel de embalses", "PorcVoluUtilDiar", "Sistema"),
+    ("aportes", "Aportes hídricos", "PorcApor", "Sistema"),
+    ("demanda", "Demanda real", "DemaReal", "Sistema"),
+)
+OVERVIEW_DAYS = 30
 CATALOG_TTL_SECONDS = 24 * 3600
 CACHE_TTL_SECONDS = {"hourly": 3600, "daily": 3 * 3600, "monthly": 12 * 3600}
 CACHE_ENTRIES = 256
@@ -78,7 +86,14 @@ Observation = tuple[date, str, list[tuple[int, float]]]
 
 
 class MarketDataError(RuntimeError):
-    """A request the API rejected or that cannot be answered; the message is for the agent."""
+    """A request the API rejected or that cannot be answered.
+
+    The message guides the agent; user_message is shown in the interface.
+    """
+
+    def __init__(self, message: str, user_message: str) -> None:
+        super().__init__(message)
+        self.user_message = user_message
 
 
 @dataclass(frozen=True)
@@ -121,6 +136,8 @@ class MarketSeries:
     request: dict[str, Any]
     chart_rows: list[tuple[str, dict[str, float]]] = field(default_factory=list)
     resolved_from: str | None = None
+    # The parameters that reproduce this series, so a client can refetch or extend it.
+    query: dict[str, Any] = field(default_factory=dict)
 
     @property
     def title(self) -> str:
@@ -150,6 +167,7 @@ class MarketSeries:
         rows = self.chart_rows or self.rows
         return {
             "unit": self.unit,
+            "query": self.query,
             "x": [label for label, _ in rows],
             "series": [
                 {"name": name, "values": [values.get(name) for _, values in rows]} for name in names
@@ -213,7 +231,8 @@ class MarketService:
         list_id = CODE_LISTS.get(entity)
         if list_id is None:
             raise MarketDataError(
-                f"Entity {entity!r} has no code list. Use one of: {', '.join(CODE_LISTS)}."
+                f"Entity {entity!r} has no code list. Use one of: {', '.join(CODE_LISTS)}.",
+                "Esa entidad no tiene un listado de códigos en XM.",
             )
         cached = self._codes.get(entity)
         if cached is None or time.monotonic() - cached[0] > CATALOG_TTL_SECONDS:
@@ -257,7 +276,10 @@ class MarketService:
             ]
             if entities:
                 hint = f" Available entities: {', '.join(sorted(entities))}."
-                raise MarketDataError(f"Unknown metric {metric_id!r} for entity {entity!r}.{hint}")
+                raise MarketDataError(
+                    f"Unknown metric {metric_id!r} for entity {entity!r}.{hint}",
+                    f"La métrica {metric_id} no está disponible para «{entity}».",
+                )
             # Models guess ids from the question ("generacion"); the closest metric for the same
             # entity answers it, and the series says which one was used.
             similar = await self.find_metrics(f"{metric_id.replace('_', ' ')} {entity}", limit=5)
@@ -267,14 +289,20 @@ class MarketService:
                     f"metric_id={item.metric_id} entity={item.entity} ({item.name})"
                     for item in similar
                 )
-                raise MarketDataError(f"Unknown metric {metric_id!r} for entity {entity!r}.{hint}")
+                raise MarketDataError(
+                    f"Unknown metric {metric_id!r} for entity {entity!r}.{hint}",
+                    f"XM no tiene la métrica {metric_id}.",
+                )
             resolved_from, metric = metric_id, same_entity[0]
         else:
             resolved_from = None
         today = datetime.now(COLOMBIA).date()
         end = min(end, today)
         if start > end:
-            raise MarketDataError("The start date is after the end date (or in the future).")
+            raise MarketDataError(
+                "The start date is after the end date (or in the future).",
+                "La fecha inicial es posterior a la final o está en el futuro.",
+            )
         span = (end - start).days + 1
         limit = settings.MARKET_MAX_RANGE_DAYS * (3 if metric.granularity == "monthly" else 1)
         if metric.entity != "Sistema" and not codes and not group_by_technology:
@@ -284,7 +312,9 @@ class MarketService:
         if span > limit:
             raise MarketDataError(
                 f"The range covers {span} days; this query allows at most {limit}. "
-                "Narrow it, or use a daily or monthly metric for long periods."
+                "Narrow it, or use a daily or monthly metric for long periods.",
+                f"El rango tiene {span} días y esta consulta admite hasta {limit}. Acórtalo"
+                + (" o filtra por códigos." if limit == UNFILTERED_MAX_DAYS else "."),
             )
 
         body_base: dict[str, Any] = {"MetricId": metric.metric_id, "Entity": metric.entity}
@@ -324,7 +354,56 @@ class MarketService:
             names = {code: f"{code} · {known[code]}" for code in known}
         series = build_series(metric, start, end, observations, names, request=body_base)
         series.resolved_from = resolved_from
+        series.query = {
+            "metric_id": metric.metric_id,
+            "entity": metric.entity,
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "codes": body_base.get("Filter", []),
+            "group_by_technology": group_by_technology,
+        }
         return series
+
+    async def overview(self) -> list[dict[str, Any]]:
+        """Latest daily value, weekly change and a 30-day trend of the headline indicators."""
+        today = datetime.now(COLOMBIA).date()
+        start = today - timedelta(days=OVERVIEW_DAYS)
+
+        async def indicator(key: str, label: str, metric_id: str, entity: str) -> dict | None:
+            try:
+                series = await self.series(metric_id, start, today, entity=entity)
+            except (MarketDataError, ProviderUnavailableError):
+                logger.warning("market indicator unavailable", extra={"metric": metric_id})
+                return None
+            name = next(iter(series.stats), None)
+            points = [
+                (label, values[name]) for label, values in series.chart_rows if name in values
+            ]
+            if not points:
+                return None
+            latest_label, latest = points[-1]
+            week_ago = points[-8][1] if len(points) >= 8 else points[0][1]
+            # Shares change in percentage points; everything else in relative terms.
+            if series.unit == "%":
+                change, change_unit = latest - week_ago, "pp"
+            else:
+                change = (latest - week_ago) / abs(week_ago) * 100 if week_ago else None
+                change_unit = "%"
+            return {
+                "key": key,
+                "label": label,
+                "metric_id": series.metric.metric_id,
+                "entity": series.metric.entity,
+                "unit": series.unit,
+                "latest_date": latest_label,
+                "latest_value": latest,
+                "change": change,
+                "change_unit": change_unit,
+                "spark": series.chart(),
+            }
+
+        results = await asyncio.gather(*(indicator(*item) for item in OVERVIEW))
+        return [item for item in results if item is not None]
 
     async def _all_codes(self, entity: str) -> list[MarketCode]:
         await self.find_codes(entity, "")
@@ -344,7 +423,10 @@ class MarketService:
                 last_error = exc
             else:
                 if response.status_code == 400:
-                    raise MarketDataError(f"XM rejected the request: {response.text[:300]}")
+                    raise MarketDataError(
+                        f"XM rejected the request: {response.text[:300]}",
+                        "XM rechazó la consulta.",
+                    )
                 if response.status_code < 500:
                     response.raise_for_status()
                     payload = response.json()
@@ -455,6 +537,8 @@ def build_series(
     request: dict[str, Any],
 ) -> MarketSeries:
     averaged = metric.units in AVERAGED_UNITS
+    if metric.granularity == "hourly" and not averaged:
+        observations = _drop_partial_last_day(observations)
 
     def combine(values: list[float]) -> float:
         return sum(values) / len(values) if averaged else sum(values)
@@ -563,6 +647,20 @@ def build_series(
     )
 
 
+def _drop_partial_last_day(observations: list[Observation]) -> list[Observation]:
+    """XM fills the current day hour by hour; summing it would read as a collapse."""
+    days = sorted({day for day, _, _ in observations})
+    if len(days) < 2:
+        return observations
+    last_hours = max(
+        (hour for day, _, values in observations if day == days[-1] for hour, _ in values),
+        default=0,
+    )
+    if last_hours >= 24:
+        return observations
+    return [item for item in observations if item[0] != days[-1]]
+
+
 def _add_entities(values: list[float], averaged: bool) -> float:
     if averaged:
         return sum(values) / len(values)
@@ -639,4 +737,6 @@ def parse_date(value: str) -> date:
     try:
         return date.fromisoformat(value.strip()[:10])
     except ValueError:
-        raise MarketDataError(f"Invalid date {value!r}; use YYYY-MM-DD.") from None
+        raise MarketDataError(
+            f"Invalid date {value!r}; use YYYY-MM-DD.", "La fecha no es válida."
+        ) from None

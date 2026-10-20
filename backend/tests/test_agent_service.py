@@ -287,6 +287,13 @@ def test_market_tools_cite_xm_series_with_chart_data(monkeypatch) -> None:
                                 "PrecBolsNaci", "2026-10-01", "2026-10-02", entity="Embalse"
                             )
                         )
+                        outputs.append(
+                            await tools["get_market_data"](
+                                "PrecBolsNaci entity=Sistema unit=COP/kWh granularity=hourly",
+                                "2026-10-01",
+                                "2026-10-02",
+                            )
+                        )
                         return SimpleNamespace(
                             response=SimpleNamespace(content="El precio subió [M1]."), raw=None
                         )
@@ -303,6 +310,9 @@ def test_market_tools_cite_xm_series_with_chart_data(monkeypatch) -> None:
     assert "metric_id=PrecBolsNaci entity=Sistema" in outputs[0]
     assert outputs[1].startswith("[M1] XM · Precio Bolsa Nacional por Sistema")
     assert "Unknown metric 'PrecBolsNaci' for entity 'Embalse'" in outputs[2]
+    assert outputs[3].startswith("[M1] XM · Precio Bolsa Nacional"), (
+        "pasted catalog lines still work"
+    )
     audit = next(event["audit"] for event in events if "audit" in event)
     market_source = next(source for source in audit["sources"] if source["id"] == "M1")
     assert market_source["kind"] == "market"
