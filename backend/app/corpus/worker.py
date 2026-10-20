@@ -75,7 +75,9 @@ def register(pgq: PgQueuer, pipeline: CorpusPipeline) -> None:
     @pgq.entrypoint(PROCESS_ENTRYPOINT, concurrency_limit=3)
     async def process(job: Job) -> None:
         payload = json.loads(job.payload or b"{}")
-        outcome = await pipeline.process_norm(payload["norm_id"])
+        outcome = await pipeline.process_norm(
+            payload["norm_id"], reparse=payload.get("reparse", False)
+        )
         logger.info("norm processed", extra={"norm_id": payload["norm_id"], "outcome": outcome})
 
     @pgq.schedule("corpus.creg.incremental", "0 */3 * * *")

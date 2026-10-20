@@ -186,7 +186,7 @@ def _listing_item(url, derogated=False):
         label="",
         title="",
         derogated=derogated,
-        draft_listing=False,
+        is_draft=False,
     )
 
 
@@ -213,3 +213,119 @@ def test_recently_published_norms_are_news(harness, monkeypatch) -> None:
     norm_id = h.run(h.pipeline._upsert_from_listing(_listing_item(url)))
     h.run(h.pipeline.process_norm(norm_id))
     assert h.scalar(select(NormEvent.kind).where(NormEvent.norm_id == norm_id)) == "norma_nueva"
+
+
+def test_draft_listing_reclassifies_an_existing_norm_instead_of_duplicating(harness) -> None:
+    url = doc_url(RES_174)
+    h = harness({url: fixture(RES_174)})
+    norm_id = h.run(h.pipeline._upsert_from_listing(_listing_item(url)))
+    h.run(h.pipeline.process_norm(norm_id))
+
+    draft = _listing_item(url)
+    draft = draft.__class__(**{**draft.__dict__, "is_draft": True})
+    assert h.run(h.pipeline._upsert_from_listing(draft)) == norm_id
+    assert h.scalar(select(func.count()).select_from(Norm)) == 1
+
+    h.fetcher.replace(url, fixture(RES_174) + b"<!-- reclassified -->")
+    h.run(h.pipeline.process_norm(norm_id))
+    norm = h.scalar(select(Norm).where(Norm.id == norm_id))
+    assert (norm.key, norm.status) == ("creg:proyecto_resolucion:174:2021", "proyecto")
+
+
+def test_the_same_amendment_reported_by_two_pages_is_stored_once(harness) -> None:
+    url = doc_url(RES_174)
+    h = harness({url: fixture(RES_174)})
+    norm_id = h.run(h.pipeline._upsert_from_listing(_listing_item(url)))
+    h.run(h.pipeline.process_norm(norm_id))
+
+    async def report_same_edge_from_another_page():
+        async with SessionFactory() as db:
+            other = Norm(
+                key="creg:resolucion:101-99:2026",
+                source="creg",
+                doc_type="resolucion",
+                number="101-99",
+                year=2026,
+                url=doc_url("resolucion_creg_101-99_2026.htm"),
+                extra={},
+            )
+            db.add(other)
+            await db.flush()
+            edge = await db.scalar(
+                select(NormRelation).where(
+                    NormRelation.reported_by_id == norm_id, NormRelation.to_article == "Artículo 1"
+                )
+            )
+            edge.reported_by_id = other.id
+            await db.commit()
+
+    h.run(report_same_edge_from_another_page())
+    amended = fixture(RES_174).replace(b"Regular aspectos", b"Regular nuevos aspectos")
+    h.fetcher.replace(url, amended)
+
+    assert h.run(h.pipeline.process_norm(norm_id)) == "indexed"
+    assert (
+        h.scalar(
+            select(func.count()).where(
+                NormRelation.to_key == "creg:resolucion:174:2021",
+                NormRelation.to_article == "Artículo 1",
+                NormRelation.from_key == "creg:resolucion:101-99:2026",
+            )
+        )
+        == 1
+    )
+
+
+def test_reparse_fixes_metadata_from_stored_pages_without_requests(harness) -> None:
+    url = doc_url(RES_174)
+    h = harness({url: fixture(RES_174)})
+    norm_id = h.run(h.pipeline._upsert_from_listing(_listing_item(url)))
+    h.run(h.pipeline.process_norm(norm_id))
+
+    async def lose_metadata():
+        async with SessionFactory() as db:
+            norm = await db.get(Norm, norm_id)
+            norm.issued_on = None
+            await db.commit()
+
+    h.run(lose_metadata())
+    requests_before = len(h.fetcher.requests)
+
+    assert h.run(h.pipeline.process_norm(norm_id, reparse=True)) == "reparsed"
+    assert len(h.fetcher.requests) == requests_before
+    norm = h.scalar(select(Norm).where(Norm.id == norm_id))
+    assert str(norm.issued_on) == "2021-10-07"
+    assert h.scalar(select(func.count()).where(NormVersion.norm_id == norm_id)) == 1
+    assert h.scalar(select(func.count()).where(NormEvent.norm_id == norm_id)) == 1
+
+
+def test_original_pdf_is_downloaded_once(harness) -> None:
+    url = doc_url(RES_174)
+    h = harness({url: fixture(RES_174)})
+    norm_id = h.run(h.pipeline._upsert_from_listing(_listing_item(url)))
+    h.run(h.pipeline.process_norm(norm_id))
+    h.fetcher.replace(url, fixture(RES_174).replace(b"Regular aspectos", b"Regular otros aspectos"))
+    h.run(h.pipeline.process_norm(norm_id))
+
+    assert sum(request.endswith(".pdf") for request in h.fetcher.requests) == 1
+
+
+def test_reclassifying_a_resolution_as_draft_is_not_a_status_event(harness) -> None:
+    url = doc_url(RES_174)
+    h = harness({url: fixture(RES_174)})
+    norm_id = h.run(h.pipeline._upsert_from_listing(_listing_item(url)))
+    h.run(h.pipeline.process_norm(norm_id))
+
+    draft = _listing_item(url)
+    h.run(h.pipeline._upsert_from_listing(draft.__class__(**{**draft.__dict__, "is_draft": True})))
+    assert h.run(h.pipeline.process_norm(norm_id)) == "not_modified"
+
+    assert h.scalar(select(Norm.status).where(Norm.id == norm_id)) == "proyecto"
+    assert (
+        h.scalar(
+            select(func.count()).where(
+                NormEvent.norm_id == norm_id, NormEvent.kind == "estado_cambiado"
+            )
+        )
+        == 0
+    )

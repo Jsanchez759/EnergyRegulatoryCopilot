@@ -66,8 +66,14 @@ Normativo. El análisis de fuentes y las próximas a integrar están en
 | `make crawl` | Encola un rastreo incremental inmediato |
 | `uv run --directory backend python -m app.corpus.cli process <URL>` | Indexa una página de la CREG sin la cola, para depurar el parser |
 
-Los PDF originales se guardan en `CORPUS_STORAGE_DIR` (en Docker, el volumen `enercol-corpus`),
-direccionados por su hash para poder moverlos a S3/R2 sin cambiar las claves.
+Los PDF originales y las páginas descargadas se guardan en `CORPUS_STORAGE_DIR`
+(`backend/storage/corpus`), direccionados por su hash para poder moverlos a S3/R2 sin cambiar las
+claves. `make dev` y `make up` comparten la misma base, la misma cola y ese mismo directorio, así
+que sus workers pueden correr a la vez. Tras cambiar el código del worker reinicia `make dev`: la API
+se recarga sola, el worker no.
+
+Si mejoras un parser, `python -m app.corpus.cli reparse` vuelve a procesar todas las normas desde
+las páginas guardadas, sin pedir nada a las fuentes ni generar eventos en el feed.
 
 ## Datos
 

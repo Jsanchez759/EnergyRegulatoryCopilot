@@ -5,6 +5,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import delete, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import settings
@@ -22,6 +23,7 @@ from app.corpus.models import (
 from app.corpus.sources import creg
 from app.corpus.storage import BlobStorage
 from app.corpus.text import pdf_text, split_passages
+from app.models import new_id
 from app.services.embeddings import EmbeddingClient
 from app.services.errors import ProviderUnavailableError
 
@@ -119,11 +121,14 @@ class CorpusPipeline:
             await db.merge(run)
             await db.commit()
 
-    async def queue_recheck(self, source: str) -> int:
+    async def queue_recheck(self, source: str, reparse: bool = False) -> int:
         async with self._sessions() as db:
             ids = list(await db.scalars(select(Norm.id).where(Norm.source == source)))
         for norm_id in ids:
-            await self._enqueue(PROCESS_ENTRYPOINT, {"norm_id": norm_id}, norm_id)
+            payload = {"norm_id": norm_id, "reparse": reparse}
+            await self._enqueue(
+                PROCESS_ENTRYPOINT, payload, f"reparse:{norm_id}" if reparse else norm_id
+            )
         return len(ids)
 
     async def _read_listing(
@@ -159,19 +164,17 @@ class CorpusPipeline:
         return creg.parse_listing(result.content, url)
 
     async def _upsert_from_listing(self, item: creg.ListingItem) -> str | None:
-        doc_type = (
-            "proyecto_resolucion"
-            if item.draft_listing or item.number.startswith("7")
-            else "resolucion"
-        )
-        key = creg.norm_key(doc_type, item.number, item.year)
+        key = creg.norm_key(item.doc_type, item.number, item.year)
         async with self._sessions() as db:
-            norm = await db.scalar(select(Norm).where(Norm.key == key))
+            # The URL identifies the document even when its classification changes.
+            norm = await db.scalar(select(Norm).where(Norm.url == item.url)) or await db.scalar(
+                select(Norm).where(Norm.key == key)
+            )
             if norm is None:
                 norm = Norm(
                     key=key,
                     source=creg.SOURCE,
-                    doc_type=doc_type,
+                    doc_type=item.doc_type,
                     number=item.number,
                     year=item.year,
                     title=item.title,
@@ -182,59 +185,87 @@ class CorpusPipeline:
                 db.add(norm)
                 await db.commit()
                 return norm.id
-            listing_changed = norm.extra.get("listing_derogated") != item.derogated
-            if listing_changed:
+            changed = norm.extra.get("listing_derogated") != item.derogated
+            if changed:
                 norm.extra = {**norm.extra, "listing_derogated": item.derogated}
-                await db.commit()
-            return norm.id if norm.content_sha256 is None or listing_changed else None
+            if norm.doc_type != item.doc_type and item.is_draft:
+                taken = await db.scalar(select(Norm.id).where(Norm.key == key, Norm.id != norm.id))
+                if taken is None:
+                    norm.key, norm.doc_type, changed = key, item.doc_type, True
+            await db.commit()
+            return norm.id if norm.content_sha256 is None or changed else None
 
-    async def process_norm(self, norm_id: str) -> str:
-        """Fetch, parse and index one norm. Returns what happened, for logs and tests."""
+    async def process_norm(self, norm_id: str, reparse: bool = False) -> str:
+        """Fetch, parse and index one norm. Returns what happened, for logs and tests.
+
+        reparse=True re-reads the stored page instead of the source, so parser fixes reach
+        already indexed norms without new requests or news events.
+        """
         async with self._sessions() as db:
             norm = await db.get(Norm, norm_id)
             if norm is None:
                 return "missing"
-            url, etag, last_modified, previous_hash = (
+            url, etag, last_modified, previous_hash, doc_type = (
                 norm.url,
                 norm.etag,
                 norm.last_modified,
                 norm.content_sha256,
+                norm.doc_type,
             )
-        result = await self._fetcher.get(
-            url,
-            etag=etag if previous_hash else None,
-            last_modified=last_modified if previous_hash else None,
-        )
-        if result.not_modified:
-            await self._touch(norm_id)
-            await self._reconcile_status(norm_id, derogated_in_text=None)
-            await self._fill_missing_embeddings(norm_id)
-            return "not_modified"
+            stored_page = await db.scalar(
+                select(NormVersion.raw_storage_key)
+                .where(NormVersion.norm_id == norm_id)
+                .order_by(NormVersion.fetched_at.desc())
+                .limit(1)
+            )
 
-        parsed = creg.parse_document(result.content, url, settings.CORPUS_CHUNK_CHARS)
+        if reparse and stored_page:
+            content = await self._storage.get(stored_page)
+        else:
+            reparse = False
+            result = await self._fetcher.get(
+                url,
+                etag=etag if previous_hash else None,
+                last_modified=last_modified if previous_hash else None,
+            )
+            if result.not_modified:
+                await self._touch(norm_id)
+                await self._reconcile_status(norm_id, derogated_in_text=None)
+                await self._fill_missing_embeddings(norm_id)
+                return "not_modified"
+            content, etag, last_modified = result.content, result.etag, result.last_modified
+
+        parsed = creg.parse_document(
+            content,
+            url,
+            settings.CORPUS_CHUNK_CHARS,
+            draft=doc_type == "proyecto_resolucion",
+        )
         primary = creg.primary_pdf(parsed.files, parsed.number)
-        pdf = await self._download(primary.url) if primary else None
+        pdf = await self._original_file(norm_id, primary.url) if primary else None
 
         text, passages, text_source = parsed.text, parsed.passages, "html"
         if len(parsed.text) < MIN_HTML_TEXT_CHARS and pdf is not None:
-            pdf_content, _ = pdf
-            text, text_source = pdf_text(pdf_content)
+            text, text_source = pdf_text(await self._storage.get(pdf[1]))
             passages = [
                 ("Texto completo" if index == 0 else f"Texto completo (parte {index + 1})", part)
                 for index, part in enumerate(split_passages(text, settings.CORPUS_CHUNK_CHARS))
             ]
 
         content_hash = hashlib.sha256(text.encode()).hexdigest()
-        if content_hash == previous_hash:
-            await self._touch(norm_id, etag=result.etag, last_modified=result.last_modified)
+        text_changed = content_hash != previous_hash
+        if not text_changed and not reparse:
+            await self._touch(norm_id, etag=etag, last_modified=last_modified)
             await self._reconcile_status(norm_id, derogated_in_text=parsed.derogated)
             await self._fill_missing_embeddings(norm_id)
             return "unchanged"
 
-        vectors = await self._embed(
-            [f"{parsed.label}. {label}\n{body}" for label, body in passages]
+        vectors = (
+            await self._embed([f"{parsed.label}. {label}\n{body}" for label, body in passages])
+            if text_changed
+            else None
         )
-        raw_key = await self._storage.put(result.content, ".htm")
+        raw_key = await self._storage.put(content, ".htm")
         async with self._sessions() as db:
             norm = await db.get(Norm, norm_id)
             previous_status = norm.status
@@ -250,69 +281,89 @@ class CorpusPipeline:
             norm.published_on = parsed.published_on
             norm.diario_oficial = parsed.diario_oficial
             norm.status = status
-            norm.etag, norm.last_modified = result.etag, result.last_modified
+            norm.etag, norm.last_modified = etag, last_modified
             norm.content_sha256 = content_hash
-            norm.last_checked_at = norm.last_changed_at = utc_now()
+            norm.last_checked_at = utc_now()
 
-            db.add(
-                NormVersion(
-                    norm_id=norm_id,
-                    content_sha256=content_hash,
-                    text=text,
-                    text_source=text_source,
-                    raw_storage_key=raw_key,
+            if text_changed:
+                norm.last_changed_at = utc_now()
+                db.add(
+                    NormVersion(
+                        norm_id=norm_id,
+                        content_sha256=content_hash,
+                        text=text,
+                        text_source=text_source,
+                        raw_storage_key=raw_key,
+                    )
                 )
-            )
-            await db.execute(delete(NormArticle).where(NormArticle.norm_id == norm_id))
-            db.add_all(
-                NormArticle(
-                    norm_id=norm_id,
-                    position=position,
-                    label=label[:200],
-                    norm_label=parsed.label,
-                    content=body,
-                    embedding=vectors[position] if vectors else None,
+                await db.execute(delete(NormArticle).where(NormArticle.norm_id == norm_id))
+                db.add_all(
+                    NormArticle(
+                        norm_id=norm_id,
+                        position=position,
+                        label=label[:200],
+                        norm_label=parsed.label,
+                        content=body,
+                        embedding=vectors[position] if vectors else None,
+                    )
+                    for position, (label, body) in enumerate(passages)
                 )
-                for position, (label, body) in enumerate(passages)
-            )
+            else:
+                await db.execute(
+                    update(NormArticle)
+                    .where(NormArticle.norm_id == norm_id)
+                    .values(norm_label=parsed.label)
+                )
             await db.execute(delete(NormRelation).where(NormRelation.reported_by_id == norm_id))
-            db.add_all(
-                NormRelation(
-                    from_key=relation.from_key,
-                    to_key=parsed.key,
-                    relation=relation.relation,
-                    from_article=relation.from_article,
-                    to_article=relation.to_article,
-                    evidence=relation.evidence,
-                    reported_by_id=norm_id,
+            if parsed.relations:
+                # Two pages can report the same amendment; the first report is kept.
+                await db.execute(
+                    pg_insert(NormRelation)
+                    .values(
+                        [
+                            {
+                                "id": new_id(),
+                                "from_key": relation.from_key,
+                                "to_key": norm.key,
+                                "relation": relation.relation,
+                                "from_article": relation.from_article,
+                                "to_article": relation.to_article,
+                                "evidence": relation.evidence,
+                                "reported_by_id": norm_id,
+                                "created_at": utc_now(),
+                            }
+                            for relation in parsed.relations
+                        ]
+                    )
+                    .on_conflict_do_nothing(constraint="uq_norm_relation")
                 )
-                for relation in parsed.relations
-            )
             await self._sync_files(db, norm_id, parsed.files, primary, pdf)
-            kind = (
-                "norma_actualizada"
-                if previous_hash is not None
-                else "norma_nueva"
-                if _recently_published(parsed.published_on or parsed.issued_on)
-                else "norma_incorporada"
-            )
-            db.add(
-                NormEvent(
-                    norm_id=norm_id,
-                    kind=kind,
-                    details={"relations": len(parsed.relations), "passages": len(passages)},
+            # Corrections from re-parsing stored pages are not regulatory news.
+            if not reparse:
+                kind = (
+                    "norma_actualizada"
+                    if previous_hash is not None
+                    else "norma_nueva"
+                    if _recently_published(parsed.published_on or parsed.issued_on)
+                    else "norma_incorporada"
                 )
-            )
-            if previous_hash is not None and previous_status != status:
                 db.add(
                     NormEvent(
                         norm_id=norm_id,
-                        kind="estado_cambiado",
-                        details={"from": previous_status, "to": status},
+                        kind=kind,
+                        details={"relations": len(parsed.relations), "passages": len(passages)},
                     )
                 )
+                if previous_hash is not None and _is_news(previous_status, status):
+                    db.add(
+                        NormEvent(
+                            norm_id=norm_id,
+                            kind="estado_cambiado",
+                            details={"from": previous_status, "to": status},
+                        )
+                    )
             await db.commit()
-        return "indexed"
+        return "indexed" if text_changed else "reparsed"
 
     async def _sync_files(
         self,
@@ -320,7 +371,7 @@ class CorpusPipeline:
         norm_id: str,
         files: list[creg.ParsedFile],
         primary: creg.ParsedFile | None,
-        pdf: tuple[bytes, str] | None,
+        pdf: tuple[int, str, str] | None,
     ) -> None:
         existing = {
             item.url: item
@@ -330,14 +381,29 @@ class CorpusPipeline:
             row = existing.get(parsed_file.url) or NormFile(norm_id=norm_id, url=parsed_file.url)
             row.label = parsed_file.label[:200]
             row.kind = "original" if parsed_file is primary else parsed_file.kind
-            if parsed_file is primary and pdf is not None:
-                content, storage_key = pdf
-                row.storage_key = storage_key
-                row.sha256 = hashlib.sha256(content).hexdigest()
-                row.size_bytes = len(content)
+            if parsed_file is primary and pdf is not None and row.storage_key != pdf[1]:
+                row.size_bytes, row.storage_key, row.sha256 = pdf
                 row.content_type = "application/pdf"
                 row.fetched_at = utc_now()
             db.add(row)
+
+    async def _original_file(self, norm_id: str, url: str) -> tuple[int, str, str] | None:
+        """(size, storage key, sha256) of the act's PDF, downloading it only the first time."""
+        async with self._sessions() as db:
+            stored = await db.scalar(
+                select(NormFile).where(
+                    NormFile.norm_id == norm_id,
+                    NormFile.url == url,
+                    NormFile.storage_key.is_not(None),
+                )
+            )
+        if stored is not None:
+            return stored.size_bytes, stored.storage_key, stored.sha256
+        downloaded = await self._download(url)
+        if downloaded is None:
+            return None
+        content, storage_key = downloaded
+        return len(content), storage_key, hashlib.sha256(content).hexdigest()
 
     async def _download(self, url: str) -> tuple[bytes, str] | None:
         try:
@@ -367,13 +433,14 @@ class CorpusPipeline:
             status = _status(norm.doc_type, derogated, norm.extra)
             if status == norm.status:
                 return
-            db.add(
-                NormEvent(
-                    norm_id=norm_id,
-                    kind="estado_cambiado",
-                    details={"from": norm.status, "to": status},
+            if _is_news(norm.status, status):
+                db.add(
+                    NormEvent(
+                        norm_id=norm_id,
+                        kind="estado_cambiado",
+                        details={"from": norm.status, "to": status},
+                    )
                 )
-            )
             norm.status = status
             await db.commit()
 
@@ -416,3 +483,8 @@ def _status(doc_type: str, derogated_in_text: bool, extra: dict[str, Any]) -> st
 
 def _recently_published(published: date | None) -> bool:
     return published is not None and published >= utc_now().date() - NEWS_WINDOW
+
+
+def _is_news(previous_status: str, status: str) -> bool:
+    """Derogations are news; reclassifying a draft or resolving an unknown status is a fix."""
+    return previous_status != status and {previous_status, status} <= {"vigente", "derogada"}

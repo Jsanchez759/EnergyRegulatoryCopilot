@@ -96,7 +96,11 @@ class ListingItem:
     label: str
     title: str
     derogated: bool
-    draft_listing: bool
+    is_draft: bool
+
+    @property
+    def doc_type(self) -> str:
+        return "proyecto_resolucion" if self.is_draft else "resolucion"
 
 
 @dataclass
@@ -182,6 +186,13 @@ def parse_listing(content: bytes, page_url: str) -> list[ListingItem]:
         title_node = anchor.select_one(".descripcion-documento")
         title = _clean(title_node.get_text(" ")) if title_node else ""
         derogated = title.lower().startswith("derogad")
+        # Before 2022 drafts were numbered as resolutions and only a "Proyecto" tag tells them
+        # apart; since then the 7xx prefix does, and draft listings also carry final acts.
+        if year >= SECTOR_PREFIX_YEAR:
+            is_draft = normalize_number(number).startswith("7")
+        else:
+            is_draft = draft_listing or bool(title_node and title_node.select_one(".proyecto"))
+        title = re.sub(r"^proyecto\s+", "", title, flags=re.I)
         items.append(
             ListingItem(
                 url=url,
@@ -190,13 +201,15 @@ def parse_listing(content: bytes, page_url: str) -> list[ListingItem]:
                 label=_clean(label_node.get_text(" ")) if label_node else "",
                 title=re.sub(r"^derogad[oa]\.?\s*[-:]?\s*", "", title, flags=re.I),
                 derogated=derogated,
-                draft_listing=draft_listing,
+                is_draft=is_draft,
             )
         )
     return items
 
 
-def parse_document(content: bytes, url: str, chunk_chars: int) -> ParsedNorm:
+def parse_document(content: bytes, url: str, chunk_chars: int, draft: bool = False) -> ParsedNorm:
+    """Parse a document page; `draft` carries the listing's classification for pre-2022 drafts,
+    whose pages are headed as ordinary resolutions."""
     from app.corpus.text import split_passages
 
     soup = BeautifulSoup(decode_html(content), "lxml")
@@ -217,7 +230,8 @@ def parse_document(content: bytes, url: str, chunk_chars: int) -> ParsedNorm:
         raise ValueError(f"Unrecognized CREG document URL: {url}")
     number, year = normalize_number(match["number"]), int(match["year"])
     header = "\n".join(lines[:12])
-    doc_type = "proyecto_resolucion" if re.match(r"PROYECTO DE RESOLUCI", header) else "resolucion"
+    is_draft = draft or bool(re.match(r"PROYECTO DE RESOLUCI", header))
+    doc_type = "proyecto_resolucion" if is_draft else "resolucion"
     key = norm_key(doc_type, number, year)
 
     sections = _split_sections(lines)
@@ -360,7 +374,7 @@ def _title(lines: list[str]) -> str:
 
 
 def _issued_on(header: str, year: int) -> date | None:
-    match = re.search(r"\((\w+)\s+(\d{1,2})\)", header)
+    match = re.search(r"\((\w+)\s+(\d{1,2})\s*(?:o|º|°)?\)", header)
     if not match or _fold(match[1]) not in MONTHS:
         return None
     try:

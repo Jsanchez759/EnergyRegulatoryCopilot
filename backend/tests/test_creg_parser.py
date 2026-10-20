@@ -97,3 +97,39 @@ def test_split_passages_respects_limit_and_keeps_text() -> None:
     passages = split_passages(text, 1000)
     assert all(len(passage) <= 1000 for passage in passages)
     assert "".join(passages).replace("\n", "") == text.replace("\n", "")
+
+
+def test_pre_2022_drafts_are_tagged_in_the_listing() -> None:
+    page = "proyectos_resolucion_servicio_energia_electrica_2019.html"
+    items = creg.parse_listing(fixture(page), listing_url(page))
+    assert items
+    assert all(item.is_draft and item.doc_type == "proyecto_resolucion" for item in items)
+    assert items[0].number == "192"
+    assert items[0].title.startswith("Por la cual se ordena hacer público")
+
+
+def test_listings_since_2022_classify_drafts_by_prefix_only() -> None:
+    items = creg.parse_listing(fixture(CHRONOLOGICAL_2026), listing_url(CHRONOLOGICAL_2026))
+    assert not any(item.is_draft for item in items if not item.number.startswith("7"))
+
+
+def test_draft_hint_overrides_resolution_header() -> None:
+    norm = creg.parse_document(
+        fixture("resolucion_creg_0024_2015.htm"),
+        doc_url("resolucion_creg_0024_2015.htm"),
+        chunk_chars=2400,
+        draft=True,
+    )
+    assert norm.key == "creg:proyecto_resolucion:24:2015"
+
+
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [
+        ("RESOLUCIÓN 47 DE 2016\n(abril 1o)", date(2016, 4, 1)),
+        ("RESOLUCIÓN 174 DE 2021\n(octubre 7)", date(2016, 10, 7)),
+        ("RESOLUCIÓN 257 DE 2016\n()", None),
+    ],
+)
+def test_issue_dates_accept_ordinals_and_missing_values(header, expected) -> None:
+    assert creg._issued_on(header, 2016) == expected

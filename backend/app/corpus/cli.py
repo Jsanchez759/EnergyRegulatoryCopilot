@@ -67,7 +67,7 @@ async def process_url(url: str) -> None:
                 label="",
                 title="",
                 derogated=False,
-                draft_listing=False,
+                is_draft=creg.normalize_number(creg.DOC_HREF.search(url)["number"]).startswith("7"),
             )
             await pipeline._upsert_from_listing(listing)
             async with SessionFactory() as db:
@@ -76,6 +76,17 @@ async def process_url(url: str) -> None:
     finally:
         await connection.close()
         await engine.dispose()
+
+
+async def enqueue_reparse(source: str) -> None:
+    connection = await asyncpg.connect(asyncpg_dsn())
+    try:
+        async with corpus_pipeline(Queries(AsyncpgDriver(connection))) as pipeline:
+            queued = await pipeline.queue_recheck(source, reparse=True)
+    finally:
+        await connection.close()
+        await engine.dispose()
+    print(f"Queued {queued} {source} norms for re-parsing from stored pages.")
 
 
 def main() -> None:
@@ -88,6 +99,8 @@ def main() -> None:
     commands.add_parser("discover")
     process = commands.add_parser("process")
     process.add_argument("url")
+    reparse = commands.add_parser("reparse")
+    reparse.add_argument("--source", default=creg.SOURCE)
     args = parser.parse_args()
 
     year = datetime.now(UTC).year
@@ -99,6 +112,8 @@ def main() -> None:
         asyncio.run(enqueue_discover([year - 1, year], "incremental"))
     elif args.command == "process":
         asyncio.run(process_url(args.url))
+    elif args.command == "reparse":
+        asyncio.run(enqueue_reparse(args.source))
 
 
 if __name__ == "__main__":

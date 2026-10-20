@@ -37,7 +37,8 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - enercol-corpus:/app/storage/corpus
+      # Same directory as `make dev`, since both use the same database and job queue.
+      - ./backend/storage/corpus:/app/storage/corpus
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -49,7 +50,8 @@ services:
     healthcheck:
       disable: true
     volumes:
-      - enercol-corpus:/app/storage/corpus
+      # Same directory as `make dev`, since both use the same database and job queue.
+      - ./backend/storage/corpus:/app/storage/corpus
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -67,4 +69,3 @@ services:
 
 volumes:
   enercol-pgdata:
-  enercol-corpus:
