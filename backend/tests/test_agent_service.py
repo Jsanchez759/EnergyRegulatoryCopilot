@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 from llama_index.core.workflow.errors import WorkflowTimeoutError
 
-from app.schemas.agent import EvidenceSource
+from app.schemas.agent import ChatMessage, EvidenceSource
 from app.services import agent_service as agent_module
 from app.services.agent_service import AgentService
 from app.services.errors import ProviderUnavailableError
@@ -45,9 +45,12 @@ class FakeLLM:
         self.reply = reply
         self.prompts: list[str] = []
 
+        self.queued: list[str] = []
+
     async def achat(self, messages):
         self.prompts.append(messages[-1].content)
-        return SimpleNamespace(message=SimpleNamespace(content=self.reply))
+        content = self.queued.pop(0) if self.queued else self.reply
+        return SimpleNamespace(message=SimpleNamespace(content=content))
 
 
 class FakeDocuments:
@@ -72,9 +75,9 @@ def service(monkeypatch: pytest.MonkeyPatch) -> tuple[AgentService, FakeLLM]:
     return agent, llm
 
 
-def collect(agent: AgentService) -> list[dict[str, object]]:
+def collect(agent: AgentService, question="¿Plazo de conexión?", history=None):
     async def run() -> list[dict[str, object]]:
-        events = [event async for event in agent.stream_answer("¿Plazo de conexión?", [], "u1")]
+        events = [event async for event in agent.stream_answer(question, history or [], "u1")]
         await agent.close()
         return events
 
@@ -180,3 +183,21 @@ def test_empty_domain_search_widens_to_open_web(service, monkeypatch) -> None:
     audit = next(event["audit"] for event in events if "audit" in event)
     assert audit["steps"][0]["summary"].startswith("No results on energia.gov.co.")
     assert [source["id"] for source in audit["sources"]] == ["W1"]
+
+
+def test_follow_up_is_rewritten_into_a_standalone_search(service) -> None:
+    agent, llm = service
+    llm.queued = ["Resolución CREG 024 de 2015 autogeneración a gran escala"]
+    history = [
+        ChatMessage(role="user", content="¿Qué regula la autogeneración a gran escala?"),
+        ChatMessage(role="assistant", content="La Resolución CREG 024 de 2015 [W1]."),
+    ]
+    events = collect(agent, question="dame un resumen más explicativo", history=history)
+
+    queries = [
+        event["activity"]["query"]
+        for event in events
+        if "activity" in event and event["activity"]["status"] == "complete"
+    ]
+    assert queries == ["Resolución CREG 024 de 2015 autogeneración a gran escala"] * 2
+    assert "La Resolución CREG 024 de 2015 [W1]." in llm.prompts[-1]
