@@ -26,7 +26,7 @@ services:
   migrate:
     build: ./backend
     <<: *api-env
-    command: ["alembic", "upgrade", "head"]
+    command: ["sh", "-c", "alembic upgrade head && python -m app.corpus.cli install-queue"]
     depends_on:
       db:
         condition: service_healthy
@@ -36,6 +36,20 @@ services:
     <<: *api-env
     ports:
       - "8000:8000"
+    volumes:
+      - enercol-corpus:/app/storage/corpus
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    build: ./backend
+    <<: *api-env
+    command: ["python", "-m", "app.corpus.worker"]
+    healthcheck:
+      disable: true
+    volumes:
+      - enercol-corpus:/app/storage/corpus
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -53,3 +67,4 @@ services:
 
 volumes:
   enercol-pgdata:
+  enercol-corpus:

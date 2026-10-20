@@ -1,4 +1,4 @@
-"""Run the API and web client together, and stop both when either exits."""
+"""Run the API, corpus worker and web client together; stop all when one exits."""
 
 import os
 import signal
@@ -31,6 +31,10 @@ def main() -> int:
                 "--port",
                 api_port,
             ],
+        ),
+        (
+            "worker",
+            [uv, "run", "--directory", "backend", "python", "-m", "app.corpus.worker"],
         ),
         (
             "frontend",

@@ -7,7 +7,7 @@ WEB_HOST ?= 127.0.0.1
 WEB_PORT ?= 5173
 API_BASE_URL ?= http://$(API_HOST):$(API_PORT)/api/v1
 
-.PHONY: help doctor setup sync lock db migrate dev backend serve frontend preview lint format format-check test e2e up down build check health
+.PHONY: help doctor setup sync lock db migrate dev backend serve frontend preview lint format format-check test e2e up down worker backfill crawl build check health
 
 help: ## Show available commands
 	@printf '\nEnerCol development commands\n\n'
@@ -35,8 +35,9 @@ lock: ## Resolve and update uv.lock
 db: ## Start local Postgres with pgvector (docker compose service `db`)
 	docker compose up -d --wait db
 
-migrate: db ## Apply database migrations (a deploy step, never run by the app itself)
+migrate: db ## Apply database migrations and the job-queue schema (deploy step)
 	$(UV) run --directory backend alembic upgrade head
+	$(UV) run --directory backend python -m app.corpus.cli install-queue
 
 dev: migrate ## Start backend and frontend together; Ctrl-C stops both
 	UV="$(UV)" NPM="$(NPM)" API_HOST="$(API_HOST)" API_PORT="$(API_PORT)" WEB_HOST="$(WEB_HOST)" WEB_PORT="$(WEB_PORT)" API_BASE_URL="$(API_BASE_URL)" $(PYTHON) scripts/dev.py
@@ -46,6 +47,15 @@ backend: migrate ## Start the FastAPI development server
 
 serve: ## Start the FastAPI production server
 	$(UV) run --directory backend fastapi run --host $(API_HOST) --port $(API_PORT)
+
+worker: migrate ## Start only the regulatory corpus worker
+	$(UV) run --directory backend python -m app.corpus.worker
+
+backfill: ## Queue a full CREG crawl since CORPUS_START_YEAR (the worker processes it)
+	$(UV) run --directory backend python -m app.corpus.cli backfill
+
+crawl: ## Queue an incremental CREG crawl now
+	$(UV) run --directory backend python -m app.corpus.cli discover
 
 frontend: ## Start only the Vite frontend
 	VITE_API_BASE_URL="$(API_BASE_URL)" $(NPM) --prefix frontend run dev -- --host $(WEB_HOST) --port $(WEB_PORT)

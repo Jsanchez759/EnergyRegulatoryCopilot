@@ -10,6 +10,11 @@ RUN uv sync --locked --no-dev --no-install-project
 
 FROM python:3.13-slim
 
+# OCR for scanned regulatory PDFs; only the worker uses it.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-spa \
+    && rm -rf /var/lib/apt/lists/*
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/opt/venv/bin:$PATH"
@@ -19,8 +24,11 @@ COPY pyproject.toml alembic.ini ./
 COPY alembic ./alembic
 COPY app ./app
 
-RUN useradd --create-home --uid 10001 enercol
+RUN useradd --create-home --uid 10001 enercol \
+    && mkdir -p /app/storage/corpus \
+    && chown -R enercol:enercol /app/storage
 USER enercol
+ENV CORPUS_STORAGE_DIR=/app/storage/corpus
 EXPOSE 8000
 
 HEALTHCHECK --interval=10s --timeout=5s --start-period=20s \
