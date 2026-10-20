@@ -24,6 +24,17 @@ const THEME_STORAGE_KEY = "enercol_theme_v1";
 const AUTH_SYNC_KEY = "enercol_auth_changed";
 const HISTORY_WIDTH_STORAGE_KEY = "enercol_history_width_v1";
 const NO_MESSAGES = [];
+const TOOL_LABELS = {
+  search_regulatory_corpus: "Normativa",
+  search_uploaded_documents: "Documentos",
+  search_web: "Web",
+};
+const NORM_STATUS_LABELS = {
+  vigente: "Vigente según la CREG",
+  derogada: "Derogada",
+  proyecto: "Proyecto en consulta",
+  desconocido: "Estado sin verificar",
+};
 const STARTERS = [
   "¿Qué establece la regulación sobre autogeneración?",
   "Resume las reglas para conectar un proyecto solar.",
@@ -56,7 +67,7 @@ function AuditPanel({ audit }) {
         <p className="audit-method">{audit.method}</p>
         {audit.steps.length > 0 && <ol className="audit-steps">
           {audit.steps.map((step, index) => <li key={`${step.tool}-${index}`}>
-            <strong>{step.tool === "search_uploaded_documents" ? "Documentos" : "Web"}</strong>
+            <strong>{TOOL_LABELS[step.tool] || "Búsqueda"}</strong>
             <span>{step.summary}</span><code>{step.query}</code>
           </li>)}
         </ol>}
@@ -65,6 +76,7 @@ function AuditPanel({ audit }) {
             <span className="source-id">{source.id}</span>
             <div className="audit-source-copy">
               <strong>{source.url ? <a href={source.url} target="_blank" rel="noreferrer">{source.title}</a> : source.title}</strong>
+              {source.status && <small className={`norm-status is-${source.status}`}>{NORM_STATUS_LABELS[source.status] || source.status}</small>}
               {source.page && <small>Página {source.page}</small>}
               {source.file_sha256 && <small>SHA-256 · {source.file_sha256}</small>}
               <details><summary>Ver evidencia</summary><p>{source.snippet}</p></details>

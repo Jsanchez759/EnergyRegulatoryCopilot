@@ -6,9 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.rate_limit import consume
+from app.corpus.storage import BlobStorage
 from app.db import get_db_session
 from app.services.agent_service import AgentService
 from app.services.auth_service import AuthenticatedUser, current_session
+from app.services.corpus_service import CorpusService
 from app.services.document_service import DocumentService
 
 DbSessionDep = Annotated[AsyncSession, Depends(get_db_session)]
@@ -36,7 +38,17 @@ def get_document_service(request: Request) -> DocumentService:
     return request.app.state.document_service
 
 
+def get_corpus_service(request: Request) -> CorpusService:
+    return request.app.state.corpus_service
+
+
+def get_storage(request: Request) -> BlobStorage:
+    return request.app.state.storage
+
+
 AgentServiceDep = Annotated[AgentService, Depends(get_agent_service)]
+CorpusServiceDep = Annotated[CorpusService, Depends(get_corpus_service)]
+StorageDep = Annotated[BlobStorage, Depends(get_storage)]
 DocumentServiceDep = Annotated[DocumentService, Depends(get_document_service)]
 
 

@@ -201,3 +201,46 @@ def test_follow_up_is_rewritten_into_a_standalone_search(service) -> None:
     ]
     assert queries == ["Resolución CREG 024 de 2015 autogeneración a gran escala"] * 2
     assert "La Resolución CREG 024 de 2015 [W1]." in llm.prompts[-1]
+
+
+class FakeCorpus:
+    async def search(self, query: str, limit: int = 8):
+        from app.services.corpus_service import CorpusHit
+
+        return [
+            CorpusHit(
+                norm_id="n1",
+                norm_key="creg:resolucion:174:2021",
+                norm_label="Resolución CREG 174 de 2021",
+                title="Por la cual se regulan las actividades de autogeneración a pequeña escala",
+                doc_type="resolucion",
+                status="vigente",
+                year=2021,
+                issued_on=None,
+                url="https://gestornormativo.creg.gov.co/gestor/entorno/docs/resolucion_creg_0174_2021.htm",
+                article_id="a1",
+                article_label="Artículo 1",
+                content="Regular aspectos técnicos, operativos y comerciales.",
+                score=0.03,
+            )
+        ]
+
+
+def test_corpus_is_searched_first_and_cited_with_status(monkeypatch) -> None:
+    monkeypatch.setattr(agent_module, "FunctionAgent", SilentAgent)
+    agent = AgentService(FakeDocuments(), FakeCorpus())
+    llm = FakeLLM("La Resolución CREG 174 de 2021 regula la AGPE [R1].")
+    agent._llm = llm
+    events = collect(agent)
+
+    searched = [
+        event["activity"]["tool"]
+        for event in events
+        if "activity" in event and event["activity"]["status"] == "complete"
+    ]
+    assert searched[0] == "search_regulatory_corpus"
+    assert "[R1] Resolución CREG 174 de 2021, Artículo 1" in llm.prompts[-1]
+    audit = next(event["audit"] for event in events if "audit" in event)
+    regulation = next(source for source in audit["sources"] if source["id"] == "R1")
+    assert regulation["kind"] == "regulation"
+    assert regulation["status"] == "vigente"

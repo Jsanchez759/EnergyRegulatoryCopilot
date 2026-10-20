@@ -12,9 +12,12 @@ from app.core.config import settings
 from app.core.logging_config import setup_logging
 from app.core.observability import init_sentry
 from app.core.request_context import RequestContextMiddleware
+from app.corpus.storage import LocalBlobStorage
 from app.db import SessionFactory, engine
 from app.services.agent_service import AgentService
+from app.services.corpus_service import CorpusService
 from app.services.document_service import DocumentService
+from app.services.embeddings import EmbeddingClient
 
 setup_logging()
 init_sentry()
@@ -34,14 +37,22 @@ def create_application() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+        application.state.embeddings = EmbeddingClient()
+        application.state.storage = LocalBlobStorage(settings.CORPUS_STORAGE_DIR)
         application.state.document_service = DocumentService(SessionFactory)
-        application.state.agent_service = AgentService(application.state.document_service)
+        application.state.corpus_service = CorpusService(
+            SessionFactory, application.state.embeddings
+        )
+        application.state.agent_service = AgentService(
+            application.state.document_service, application.state.corpus_service
+        )
         logger.info("application started", extra={"version": settings.VERSION})
         try:
             yield
         finally:
             await application.state.agent_service.close()
             await application.state.document_service.close()
+            await application.state.embeddings.close()
             await engine.dispose()
 
     app = FastAPI(

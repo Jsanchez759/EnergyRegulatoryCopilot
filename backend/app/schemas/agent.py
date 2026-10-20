@@ -33,13 +33,14 @@ class ConversationListResponse(BaseModel):
 
 class EvidenceSource(BaseModel):
     id: str
-    kind: Literal["document", "web"]
+    kind: Literal["regulation", "document", "web"]
     title: str
     snippet: str
     url: str | None = None
     page: int | None = None
     score: float | None = None
     file_sha256: str | None = None
+    status: str | None = None
     indexed_at: str | None = None
 
 

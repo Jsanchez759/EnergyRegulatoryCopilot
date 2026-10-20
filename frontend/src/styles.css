@@ -505,3 +505,8 @@ kbd { padding: 2px 4px; border: 1px solid var(--line); border-radius: 3px; backg
 .document-entry:hover .document-delete, .document-delete:focus-visible { opacity: 1; }
 .document-delete:hover { color: #b34a4a; background: var(--surface); }
 @media (hover: none) { .document-delete { opacity: 1; } }
+
+.norm-status { font-weight: 600; }
+.norm-status.is-vigente { color: var(--accent); }
+.norm-status.is-derogada { color: #b34a4a; }
+.norm-status.is-proyecto { color: #a06a1a; }
