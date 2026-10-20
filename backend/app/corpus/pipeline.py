@@ -133,8 +133,11 @@ class CorpusPipeline:
             await db.commit()
 
     async def queue_recheck(self, source: str, reparse: bool = False) -> int:
+        conditions = [Norm.source == source]
+        if reparse:
+            conditions.append(Norm.content_sha256.is_not(None))
         async with self._sessions() as db:
-            ids = list(await db.scalars(select(Norm.id).where(Norm.source == source)))
+            ids = list(await db.scalars(select(Norm.id).where(*conditions)))
         for norm_id in ids:
             payload = {"norm_id": norm_id, "reparse": reparse}
             await self._enqueue(
