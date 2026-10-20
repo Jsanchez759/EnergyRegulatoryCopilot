@@ -89,7 +89,7 @@ export default function AssistantPanel({ draft, onDraftUsed, describeCanvas, onC
         </div>
         <div className="market-assistant-tools">
           {messages.length > 0 && <button type="button" className="market-card-button is-quiet" onClick={() => setMessages([])}>Limpiar</button>}
-          <button type="button" className="market-card-button is-quiet market-assistant-close" aria-label="Cerrar asistente" onClick={onClose}>×</button>
+          <button type="button" className="market-card-button is-quiet market-assistant-close" aria-label="Ocultar asistente" title="Ocultar asistente" onClick={onClose}>×</button>
         </div>
       </header>
       <div className="market-assistant-thread">

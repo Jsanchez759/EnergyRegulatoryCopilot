@@ -11,13 +11,30 @@ import useCanvas, { makeChartId } from "./useCanvas";
 import Icon from "../../shared/Icon";
 
 const MAX_CONTEXT_CHARTS = 4;
+const ASSISTANT_KEY = "enercol_market_assistant_open_v1";
+
+// Open by default where it fits beside the canvas; a drawer on narrow screens.
+function initialAssistantOpen() {
+  const wide = window.matchMedia("(min-width: 1181px)").matches;
+  try {
+    const stored = window.localStorage.getItem(ASSISTANT_KEY);
+    if (wide && stored !== null) return stored === "true";
+  } catch { /* Fall back to the screen default. */ }
+  return wide;
+}
 
 export default function MarketPage() {
   const canvas = useCanvas();
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState(null);
   const [highlighted, setHighlighted] = useState(new Set());
-  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [assistantOpen, setAssistantOpenState] = useState(initialAssistantOpen);
+  const setAssistantOpen = useCallback((open) => {
+    setAssistantOpenState(open);
+    if (window.matchMedia("(min-width: 1181px)").matches) {
+      try { window.localStorage.setItem(ASSISTANT_KEY, String(open)); } catch { /* Not persisted. */ }
+    }
+  }, []);
 
   const showChart = useCallback((chartId) => {
     document.getElementById(`grafica-${chartId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });

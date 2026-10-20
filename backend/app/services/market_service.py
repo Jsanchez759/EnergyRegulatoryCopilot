@@ -49,7 +49,11 @@ PREFERRED_METRICS = {
     ): "precio de bolsa nacional horario: la referencia para 'precio de bolsa'",
     ("PPPrecBolsNaci", "Sistema"): "precio de bolsa promedio ponderado diario",
     ("PrecEsca", "Sistema"): "precio de escasez",
-    ("DemaReal", "Sistema"): "demanda real del SIN",
+    ("DemaSIN", "Sistema"): "demanda total del SIN por día: la referencia para 'demanda'",
+    (
+        "DemaReal",
+        "Sistema",
+    ): "demanda real por hora; los días más recientes pueden estar incompletos",
     (
         "Gene",
         "Sistema",
@@ -65,7 +69,7 @@ OVERVIEW = (
     ("precio_escasez", "Precio de escasez", "PrecEsca", "Sistema"),
     ("embalses", "Nivel de embalses", "PorcVoluUtilDiar", "Sistema"),
     ("aportes", "Aportes hídricos", "PorcApor", "Sistema"),
-    ("demanda", "Demanda real", "DemaReal", "Sistema"),
+    ("demanda", "Demanda del SIN", "DemaSIN", "Sistema"),
 )
 OVERVIEW_DAYS = 30
 CATALOG_TTL_SECONDS = 24 * 3600
@@ -379,6 +383,7 @@ class MarketService:
             points = [
                 (label, values[name]) for label, values in series.chart_rows if name in values
             ]
+            points = _drop_provisional_tail(points)
             if not points:
                 return None
             latest_label, latest = points[-1]
@@ -399,7 +404,7 @@ class MarketService:
                 "latest_value": latest,
                 "change": change,
                 "change_unit": change_unit,
-                "spark": series.chart(),
+                "spark": _chart_until(series.chart(), latest_label),
             }
 
         results = await asyncio.gather(*(indicator(*item) for item in OVERVIEW))
@@ -645,6 +650,26 @@ def build_series(
         request={**request, "StartDate": start.isoformat(), "EndDate": end.isoformat()},
         chart_rows=chart_rows,
     )
+
+
+def _chart_until(chart: dict[str, Any], last_label: str) -> dict[str, Any]:
+    size = chart["x"].index(last_label) + 1 if last_label in chart["x"] else len(chart["x"])
+    return {
+        **chart,
+        "x": chart["x"][:size],
+        "series": [{**item, "values": item["values"][:size]} for item in chart["series"]],
+    }
+
+
+def _drop_provisional_tail(points: list[tuple[str, float]]) -> list[tuple[str, float]]:
+    """XM first publishes placeholder values (a fraction of the usual) for the latest days."""
+    if len(points) < 5:
+        return points
+    ordered = sorted(abs(value) for _, value in points)
+    median = ordered[len(ordered) // 2]
+    while len(points) > 1 and median and abs(points[-1][1]) < median / 2:
+        points = points[:-1]
+    return points
 
 
 def _drop_partial_last_day(observations: list[Observation]) -> list[Observation]:

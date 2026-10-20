@@ -8,6 +8,29 @@ import PrimaryNav, { BrandLink } from "../../shared/PrimaryNav";
 import useResizableWidth from "../../shared/useResizableWidth";
 import useTheme from "../../shared/useTheme";
 
+// Shown in the sidebar so visitors see where coverage is heading.
+const UPCOMING_CORPUS = [
+  { name: "UPME", detail: "Resoluciones y planes de expansión" },
+  { name: "CNO", detail: "Acuerdos del Consejo Nacional de Operación" },
+  { name: "SUIN-Juriscol", detail: "Leyes, decretos y vigencia" },
+  { name: "Superservicios", detail: "Circulares y conceptos" },
+];
+const UPCOMING_MARKET = [
+  { name: "SIMEM · XM", detail: "Datos abiertos del mercado mayorista" },
+  { name: "PARATEC · XM", detail: "Parámetros técnicos del SIN" },
+  { name: "SUI · Superservicios", detail: "Información comercial de las empresas" },
+];
+
+function UpcomingSources({ sources }) {
+  return sources.map((source) => <div key={source.name} className="source-health-row is-upcoming">
+    <span className="source-health-dot" />
+    <div>
+      <strong>{source.name} <span className="soon-badge">Pronto</span></strong>
+      <small>{source.detail}</small>
+    </div>
+  </div>);
+}
+
 const SECTION_TITLES = { "/monitor": "Monitor regulatorio", "/normativa": "Normativa", "/mercado": "Mercado eléctrico" };
 
 function SourceHealth() {
@@ -31,6 +54,7 @@ function SourceHealth() {
           </div>
         </div>;
       })}
+      <UpcomingSources sources={UPCOMING_CORPUS} />
     </section>
   );
 }
@@ -58,6 +82,7 @@ export default function CorpusLayout({ user }) {
           ? <section className="source-health" aria-label="Fuente de datos">
             <div className="sidebar-label">Fuente</div>
             <div className="source-health-row"><span className="source-health-dot is-ok" /><div><strong>XM · Sinergox</strong><small>Datos en vivo, con cerca de un día de rezago</small></div></div>
+            <UpcomingSources sources={UPCOMING_MARKET} />
           </section>
           : <SourceHealth />}
         <div className="sidebar-bottom">

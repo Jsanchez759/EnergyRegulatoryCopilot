@@ -246,3 +246,10 @@ def test_a_partially_published_last_day_is_not_summed() -> None:
     xm = service(FakeXM({("hourly", "DemaReal"): payload}))
     series = run(xm.series("DemaReal", date(2026, 10, 16), date(2026, 10, 18)))
     assert [label for label, _ in series.rows] == ["2026-10-16", "2026-10-17"]
+
+
+def test_overview_skips_provisional_values_at_the_end() -> None:
+    points = [(f"2026-10-{day:02d}", 240.0) for day in range(1, 9)] + [("2026-10-09", 0.2)]
+    assert market_service._drop_provisional_tail(points)[-1] == ("2026-10-08", 240.0)
+    steady = [(f"2026-10-{day:02d}", 70.0 + day) for day in range(1, 9)]
+    assert market_service._drop_provisional_tail(steady) == steady
