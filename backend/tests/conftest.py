@@ -22,6 +22,8 @@ os.environ.update(
         "RATE_LIMIT_AUTH": "10000/minute",
         "RATE_LIMIT_AGENT": "10000/minute",
         "RATE_LIMIT_UPLOAD": "10000/minute",
+        "RATE_LIMIT_PUBLIC": "10000/minute",
+        "REGISTRATION_MODE": "open",
     }
 )
 
@@ -81,3 +83,24 @@ def make_user(client: TestClient):
         return user_client
 
     return _make_user
+
+
+async def _promote(email: str) -> None:
+    from sqlalchemy import update
+
+    from app.db import SessionFactory
+    from app.models import User
+
+    async with SessionFactory() as db:
+        await db.execute(update(User).where(User.email == email).values(role="admin"))
+        await db.commit()
+
+
+@pytest.fixture
+def make_admin(make_user):
+    def _make_admin() -> TestClient:
+        admin = make_user()
+        asyncio.run(_promote(admin.get("/api/v1/auth/me").json()["email"]))
+        return admin
+
+    return _make_admin

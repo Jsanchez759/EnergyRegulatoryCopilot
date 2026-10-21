@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Request, Response, status
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.api.dependencies import CurrentUserDep, DbSessionDep, rate_limit
@@ -20,11 +20,18 @@ from app.services.auth_service import (
     hash_password,
     issue_session,
     register_user,
+    revoke_sessions,
     verify_password,
 )
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 auth_rate_limit = rate_limit("auth", lambda: settings.RATE_LIMIT_AUTH, by="ip")
+INACTIVE_MESSAGES = {
+    "waitlist": (
+        "Tu cuenta está en la lista de espera de la beta. Te avisaremos cuando tengas acceso."
+    ),
+    "suspended": "Tu cuenta está suspendida. Escríbenos si crees que es un error.",
+}
 
 
 def user_response(user: User) -> UserResponse:
@@ -32,6 +39,8 @@ def user_response(user: User) -> UserResponse:
         id=user.id,
         display_name=user.display_name,
         email=user.email,
+        role=user.role,
+        status=user.status,
         created_at=user.created_at.isoformat(),
     )
 
@@ -65,7 +74,15 @@ async def register(
     db: DbSessionDep,
 ) -> UserResponse:
     try:
-        user = await register_user(db, payload.display_name, str(payload.email), payload.password)
+        user = await register_user(
+            db,
+            payload.display_name,
+            str(payload.email),
+            payload.password,
+            company=payload.company,
+            profile=payload.profile,
+            use_case=payload.use_case,
+        )
     except DuplicateEmailError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except IntegrityError as exc:
@@ -74,7 +91,9 @@ async def register(
             status_code=status.HTTP_409_CONFLICT,
             detail="Ya existe una cuenta con este correo electrónico.",
         ) from exc
-    set_session_cookie(response, await issue_session(db, user))
+    # Waitlisted accounts get no session; the response tells the page to show the waitlist note.
+    if user.status == "active":
+        set_session_cookie(response, await issue_session(db, user))
     return user_response(user)
 
 
@@ -89,6 +108,11 @@ async def login(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="El correo electrónico o la contraseña no son correctos.",
+        )
+    # Only someone who knows the password learns the account's state.
+    if user.status in INACTIVE_MESSAGES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=INACTIVE_MESSAGES[user.status]
         )
     set_session_cookie(response, await issue_session(db, user))
     return user_response(user)
@@ -162,7 +186,7 @@ async def change_password(
             detail="Elige una contraseña distinta a la actual.",
         )
     current.user.password_hash = hash_password(payload.new_password)
-    await db.execute(delete(UserSession).where(UserSession.user_id == current.user.id))
+    await revoke_sessions(db, current.user.id)
     await db.commit()
     response = Response(status_code=status.HTTP_204_NO_CONTENT)
     set_session_cookie(response, await issue_session(db, current.user))

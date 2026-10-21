@@ -1,4 +1,4 @@
-import { Outlet, useLocation } from "react-router-dom";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
 
 import AccountControls from "../auth/AccountControls";
 import { useCorpusStatus, useSourceCatalog } from "./api";
@@ -6,20 +6,8 @@ import { formatDateTime, sourceName } from "./labels";
 import Icon from "../../shared/Icon";
 import PrimaryNav, { BrandLink } from "../../shared/PrimaryNav";
 import useResizableWidth from "../../shared/useResizableWidth";
+import { UPCOMING_CORPUS, UPCOMING_MARKET } from "../../shared/sources";
 import useTheme from "../../shared/useTheme";
-
-// Shown in the sidebar so visitors see where coverage is heading.
-const UPCOMING_CORPUS = [
-  { name: "UPME", detail: "Resoluciones y planes de expansión" },
-  { name: "CNO", detail: "Acuerdos del Consejo Nacional de Operación" },
-  { name: "SUIN-Juriscol", detail: "Leyes, decretos y vigencia" },
-  { name: "Superservicios", detail: "Circulares y conceptos" },
-];
-const UPCOMING_MARKET = [
-  { name: "SIMEM · XM", detail: "Datos abiertos del mercado mayorista" },
-  { name: "PARATEC · XM", detail: "Parámetros técnicos del SIN" },
-  { name: "SUI · Superservicios", detail: "Información comercial de las empresas" },
-];
 
 function UpcomingSources({ sources }) {
   return sources.map((source) => <div key={source.name} className="source-health-row is-upcoming">
@@ -31,7 +19,23 @@ function UpcomingSources({ sources }) {
   </div>);
 }
 
-const SECTION_TITLES = { "/monitor": "Monitor regulatorio", "/normativa": "Normativa", "/mercado": "Mercado eléctrico" };
+const SECTION_TITLES = { "/monitor": "Monitor regulatorio", "/normativa": "Normativa", "/mercado": "Mercado eléctrico", "/admin": "Administración" };
+const ADMIN_LINKS = [
+  { to: "/admin", label: "Resumen", end: true },
+  { to: "/admin/usuarios", label: "Usuarios" },
+  { to: "/admin/actividad", label: "Actividad" },
+];
+
+function AdminNav() {
+  return (
+    <section className="source-health" aria-label="Administración">
+      <div className="sidebar-label">Administración</div>
+      <nav className="admin-nav">
+        {ADMIN_LINKS.map((link) => <NavLink key={link.to} to={link.to} end={link.end} className={({ isActive }) => `admin-nav-link ${isActive ? "is-active" : ""}`}>{link.label}</NavLink>)}
+      </nav>
+    </section>
+  );
+}
 
 function SourceHealth() {
   const catalog = useSourceCatalog();
@@ -68,7 +72,7 @@ export default function CorpusLayout({ user }) {
     minWidth: 200,
     maxWidth: 480,
   });
-  const section = ["/normativa", "/mercado"].find((path) => location.pathname.startsWith(path)) || "/monitor";
+  const section = ["/normativa", "/mercado", "/admin"].find((path) => location.pathname.startsWith(path)) || "/monitor";
 
   return (
     <main
@@ -77,8 +81,8 @@ export default function CorpusLayout({ user }) {
     >
       <aside className="history-pane" aria-label="Navegación">
         <BrandLink />
-        <PrimaryNav />
-        {section === "/mercado"
+        <PrimaryNav user={user} />
+        {section === "/admin" ? <AdminNav /> : section === "/mercado"
           ? <section className="source-health" aria-label="Fuente de datos">
             <div className="sidebar-label">Fuente</div>
             <div className="source-health-row"><span className="source-health-dot is-ok" /><div><strong>XM · Sinergox</strong><small>Datos en vivo, con cerca de un día de rezago</small></div></div>

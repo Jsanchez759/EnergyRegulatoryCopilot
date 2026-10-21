@@ -13,6 +13,7 @@ from app.db import SessionFactory
 from app.models import Conversation, ConversationMessage
 from app.schemas.agent import AgentRequest, ChatMessage
 from app.services.errors import ProviderUnavailableError
+from app.services.usage_service import record_usage, start_metering
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 logger = logging.getLogger(__name__)
@@ -74,6 +75,7 @@ async def research_stream(
     final_answer: str | None = None
     audit = None
     failure = None
+    meter = start_metering("research", settings.OPENROUTER_CHAT_MODEL)
     try:
         async for event in agent_service.stream_answer(payload.question, history, current.user.id):
             if event.get("delta"):
@@ -94,6 +96,7 @@ async def research_stream(
         yield ServerSentEvent(data={"error": failure})
         yield ServerSentEvent(data={"done": True})
     finally:
+        await record_usage(meter, current.user.id, failed=failure is not None)
         content = final_answer or "".join(answer_parts)
         if failure:
             content = f"No se pudo completar la consulta. {failure}"

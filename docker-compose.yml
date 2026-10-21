@@ -4,6 +4,8 @@ x-api-env: &api-env
     ENVIRONMENT: staging
     DATABASE_URL: postgresql+asyncpg://enercol:enercol@db:5432/enercol
     ALLOWED_ORIGINS: '["http://localhost:8080"]'
+    # End-to-end runs sign up, approve and sign in an account per test.
+    RATE_LIMIT_AUTH: 60/minute;600/hour
 
 services:
   db:

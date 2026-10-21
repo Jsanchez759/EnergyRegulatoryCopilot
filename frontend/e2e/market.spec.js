@@ -1,17 +1,9 @@
 import { expect, test } from "@playwright/test";
 
-async function signIn(page) {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Crear cuenta" }).click();
-  await page.getByLabel("Nombre").fill("Prueba Mercado");
-  await page.getByLabel("Correo electrónico").fill(`mercado-${Date.now()}-${Math.random().toString(16).slice(2, 8)}@example.com`);
-  await page.getByLabel("Contraseña").fill("e2e-password-segura");
-  await page.locator(".auth-submit").click();
-  await expect(page.getByLabel("Escribe tu consulta")).toBeVisible();
-}
+import { signUp } from "./accounts";
 
 test("market page shows indicators, builds a chart and keeps the canvas", async ({ page }) => {
-  await signIn(page);
+  await signUp(page, { name: "Prueba Mercado", prefix: "mercado" });
   await page.getByRole("link", { name: "Mercado" }).click();
   await expect(page).toHaveURL(/\/mercado$/);
   await expect(page.locator(".market-tile:not(.is-loading)").first()).toBeVisible({ timeout: 60_000 });

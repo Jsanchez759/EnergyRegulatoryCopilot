@@ -1,8 +1,10 @@
 const number = new Intl.NumberFormat("es-CO", { maximumFractionDigits: 2 });
+const small = new Intl.NumberFormat("es-CO", { maximumSignificantDigits: 3 });
 const compact = new Intl.NumberFormat("es-CO", { maximumFractionDigits: 1 });
 
 export function formatNumber(value) {
-  return number.format(value);
+  // Below 0.01 two decimals would print every value as 0.
+  return value !== 0 && Math.abs(value) < 0.01 ? small.format(value) : number.format(value);
 }
 
 export function formatCompact(value) {

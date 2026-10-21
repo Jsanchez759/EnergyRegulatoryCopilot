@@ -35,8 +35,11 @@ make dev                               # levanta Postgres, migra y arranca API +
 | `make check` | Lockfile, lint, formato, pruebas y build de producción |
 | `make up` / `make down` | Stack completo en Docker: web `:8080`, API `:8000` |
 | `make e2e` | Playwright contra el stack levantado, con modelo y embeddings reales |
+| `make admin EMAIL=…` | Crea o promueve una cuenta de administrador en el stack de Docker |
 
 La primera vez que corras e2e: `npx --prefix frontend playwright install chromium`.
+`make e2e` crea su propia cuenta de administrador (`e2e-admin@example.com`) para aprobar las
+cuentas de prueba, y al terminar borra todas las cuentas `@example.com` que creó la suite.
 CI (`.github/workflows/ci.yml`) ejecuta lint, `alembic check`, pruebas con Postgres, build y las
 imágenes Docker en cada PR.
 
@@ -116,6 +119,29 @@ tecnología, embalses, aportes, contratos, intercambios y emisiones.
   él ("Preguntar" sobre una gráfica). El lienzo y el chat se guardan en el navegador.
 - SIMEM y un histórico propio de series clave quedan para fases siguientes.
 
+## Acceso, landing y administración
+
+- **Landing pública (`/`):** quien no tiene sesión ve la página de producto con datos en vivo
+  (consultas abiertas o últimas normas, indicadores de XM y cobertura del corpus), servidos por
+  `GET /api/v1/public/overview`, sin sesión, limitado por IP y cacheado 10 minutos. Con sesión,
+  `/` sigue siendo el espacio de investigación. Iniciar sesión está en `/ingresar`; registrarse,
+  en `/registro`. Un enlace profundo sin sesión pasa por `/ingresar` y vuelve a la página pedida.
+- **Lista de espera:** con `REGISTRATION_MODE=waitlist` (el valor por defecto), registrarse crea
+  la cuenta en estado `waitlist` y sin sesión. El formulario pide además empresa, perfil y uso
+  previsto, todos opcionales. El login responde 403 solo si la contraseña es correcta, para no
+  revelar quién está en la lista. `open` activa las cuentas al registrarse.
+- **Administradores:** el primero se crea por consola (`make admin EMAIL=…`, o
+  `python -m app.cli admin EMAIL` con la contraseña en `ENERCOL_ADMIN_PASSWORD` para una cuenta
+  nueva). Desde la interfaz no hay forma de volverse administrador si no lo hace otro admin.
+- **Panel (`/admin`):** resumen de usuarios, consultas y costo por día, por herramienta y por
+  modelo; lista de usuarios con filtros por estado, búsqueda y aprobación en un clic; ficha con
+  uso, sesiones e historial; y registro de actividad. Suspender cierra las sesiones de la cuenta.
+  Un admin no puede cambiar su propio rol o estado ni borrarse.
+- **Uso y costo:** cada consulta a los asistentes guarda una fila en `usage_events` con las
+  llamadas al modelo, los tokens y el costo en USD que reporta OpenRouter, también si la consulta
+  falla. Se captura con un manejador de instrumentación de LlamaIndex. Las filas sobreviven al
+  borrado de la cuenta para que los totales sigan siendo correctos.
+
 ## Datos
 
 - Cuentas, sesiones, conversaciones, documentos y fragmentos con embeddings viven en Postgres.
@@ -173,6 +199,7 @@ Las opciones se definen en `backend/app/core/config.py` y se sobrescriben desde 
 | `SESSION_COOKIE_SECURE` / `SESSION_COOKIE_SAMESITE` | `false` / `lax` | Atributos de la cookie |
 | `RATE_LIMIT_STORAGE_URI` | `memory://` | Almacén de contadores (`redis://…` con varias réplicas) |
 | `RATE_LIMIT_AUTH` | `10/minute;50/hour` | Login, registro y cambio de contraseña, por IP |
+| `RATE_LIMIT_PUBLIC` | `60/minute` | Datos de la landing, por IP |
 | `RATE_LIMIT_AGENT` | `15/minute;300/day` | Consultas al agente, por usuario |
 | `RATE_LIMIT_UPLOAD` | `20/hour` | Cargas de PDF, por usuario |
 | `RAG_CHUNK_SIZE` / `RAG_CHUNK_OVERLAP` | `900` / `160` | Fragmentación en caracteres |
@@ -191,6 +218,7 @@ Las opciones se definen en `backend/app/core/config.py` y se sobrescriben desde 
 | `RATE_LIMIT_MARKET` | `60/minute;2000/day` | Consultas de series de mercado, por usuario |
 | `MARKET_MAX_RANGE_DAYS` | `366` | Rango máximo de una consulta horaria o diaria (×3 para mensuales) |
 | `AGENT_MAX_ITERATIONS` | `6` | Pasos máximos del agente por pregunta |
+| `REGISTRATION_MODE` | `waitlist` | `waitlist` deja las cuentas nuevas en espera; `open` las activa |
 
 ## Frontend
 
@@ -206,6 +234,7 @@ frontend a `ALLOWED_ORIGINS`.
 ## API
 
 - `GET /api/v1/health`, `GET /api/v1/health/ready`
+- `GET /api/v1/public/overview`: datos en vivo de la landing, sin sesión
 - `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/logout`
 - `GET|PATCH|DELETE /api/v1/auth/me`, `POST /api/v1/auth/password`
 - `GET|POST /api/v1/conversations`, `GET /api/v1/conversations/{id}/messages`,
@@ -223,6 +252,9 @@ frontend a `ALLOWED_ORIGINS`.
 - `GET /api/v1/market/series?metric_id=&start=&end=[&entity=&codes=&group_by_technology=]`:
   serie agregada lista para graficar; `GET /api/v1/market/overview`: indicadores del día
 - `POST /api/v1/market/assistant`: asistente de mercado por SSE, sin conversación guardada
+- `GET /api/v1/admin/overview`, `GET /api/v1/admin/users` (`q`, `status`, `role`, `limit`,
+  `offset`), `GET|PATCH|DELETE /api/v1/admin/users/{id}`,
+  `POST /api/v1/admin/users/{id}/revoke-sessions`, `GET /api/v1/admin/audit`: solo administradores
 
 Las respuestas 429 incluyen `Retry-After`.
 
@@ -236,7 +268,9 @@ Las respuestas 429 incluyen `Retry-After`.
   de MinEnergía salen de los títulos y no cubren modificaciones mencionadas solo en el articulado.
 - Los modelos gratuitos de OpenRouter no sirven:
   bloquean llamadas al azar y limitan a 20 solicitudes por minuto.
-- No hay verificación de correo ni recuperación de contraseña todavía.
+- No hay verificación de correo ni recuperación de contraseña todavía, y la aprobación de la lista
+  de espera no envía correo: hay que avisarle a la persona por fuera.
+- La landing no se prerenderiza; los buscadores ven solo las meta etiquetas de `index.html`.
 - El modelo por defecto salió de comparar cinco modelos baratos con las mismas preguntas de
   mercado y normativa. `amazon/nova-micro-v1` etiquetaba mal las series (presentaba la generación
   total como solar), y Qwen y DeepSeek fallaron en una pregunta cada uno. GLM 5.3 Flash acertó,

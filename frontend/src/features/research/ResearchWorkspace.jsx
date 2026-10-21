@@ -303,7 +303,7 @@ export default function ResearchWorkspace({ user }) {
     >
       {showHistory && <aside className="history-pane" aria-label="Conversaciones">
         <BrandLink />
-        <PrimaryNav />
+        <PrimaryNav user={user} />
         <button className="mobile-close" type="button" onClick={() => setShowHistory(false)} aria-label="Cerrar conversaciones"><Icon name="close" size={18} /></button>
         <button className="new-chat-button" type="button" onClick={createNewChat} disabled={isSending}>
           <Icon name="plus" size={16} /> Nueva consulta

@@ -1,21 +1,39 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Link, useLocation } from "react-router-dom";
 
-import { API_BASE_URL, requestJson } from "../../lib/api";
 import Icon from "../../shared/Icon";
-import { authQueryKey } from "./api";
+import { usePublicOverview } from "../landing/api";
+import { authApi, authQueryKey } from "./api";
+import { PROFILES } from "./profiles";
 
-export default function AuthScreen() {
+function WaitlistConfirmation({ user }) {
+  return (
+    <div className="auth-form-wrap waitlist-done" role="status">
+      <span className="waitlist-check"><Icon name="check" size={22} /></span>
+      <span className="auth-overline">LISTA DE ESPERA</span>
+      <h2>Ya estás en la lista.</h2>
+      <p className="auth-intro">Gracias, {user.display_name.split(" ")[0]}. Abrimos cupos de la beta por orden de llegada; cuando aprobemos tu acceso podrás entrar con <strong>{user.email}</strong> y la contraseña que acabas de crear.</p>
+      <Link className="auth-submit" to="/">Volver al inicio <Icon name="arrow" size={16} /></Link>
+    </div>
+  );
+}
+
+export default function AuthScreen({ mode }) {
   const queryClient = useQueryClient();
-  const [mode, setMode] = useState("login");
+  const location = useLocation();
+  const overview = usePublicOverview();
+  const waitlist = (overview.data?.registration_mode || "waitlist") === "waitlist";
   const [error, setError] = useState("");
+  const [waiting, setWaiting] = useState(null);
+  const register = mode === "register";
   const mutation = useMutation({
-    mutationFn: (payload) => requestJson(`${API_BASE_URL}/auth/${mode === "login" ? "login" : "register"}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    }),
+    mutationFn: (payload) => (register ? authApi.register(payload) : authApi.login(payload)),
     onSuccess: (user) => {
+      if (user.status === "waitlist") {
+        setWaiting(user);
+        return;
+      }
       localStorage.setItem("enercol_auth_changed", String(Date.now()));
       queryClient.setQueryData(authQueryKey, user);
       queryClient.invalidateQueries({ queryKey: ["conversations"] });
@@ -28,65 +46,91 @@ export default function AuthScreen() {
     event.preventDefault();
     setError("");
     const form = new FormData(event.currentTarget);
-    const payload = {
-      email: String(form.get("email") || "").trim(),
-      password: String(form.get("password") || ""),
-    };
-    if (mode === "register") payload.display_name = String(form.get("display_name") || "").trim();
+    const value = (name) => String(form.get(name) || "").trim();
+    const payload = { email: value("email"), password: String(form.get("password") || "") };
+    if (register) {
+      Object.assign(payload, {
+        display_name: value("display_name"),
+        company: value("company") || null,
+        profile: value("profile") || null,
+        use_case: value("use_case") || null,
+      });
+    }
     mutation.mutate(payload);
   }
+
+  const heading = register ? (waitlist ? "Únete a la beta." : "Crea tu espacio.") : "Qué bueno verte.";
+  const intro = register
+    ? (waitlist ? "La beta es gratuita. Déjanos tus datos y te damos acceso por orden de llegada." : "Guarda tus documentos y consultas en un solo lugar.")
+    : "Inicia sesión para continuar donde lo dejaste.";
 
   return (
     <main className="auth-screen">
       <section className="auth-story" aria-label="EnerCol">
-        <a className="brand auth-brand" href="#inicio" aria-label="EnerCol">
+        <Link className="brand auth-brand" to="/" aria-label="EnerCol inicio">
           <span className="brand-mark"><span /><span /><span /></span>
           <span>enercol<span className="brand-period">.</span></span>
-        </a>
+        </Link>
         <div className="auth-story-copy">
           <div className="welcome-rule"><span /> INVESTIGACIÓN REGULATORIA</div>
           <h1>Investiga<br />con <em>evidencia.</em></h1>
-          <p>Regulación energética colombiana, documentos propios y fuentes consultables en un solo espacio.</p>
+          <p>Regulación de la CREG y MinEnergía, datos del mercado de XM y tus propios documentos en un solo espacio.</p>
         </div>
         <div className="auth-workflow" aria-label="Cómo funciona EnerCol">
-          <div><span>01</span><p><strong>Busca en tus documentos</strong><small>PDFs indexados con página de origen</small></p></div>
-          <div><span>02</span><p><strong>Contrasta fuentes vigentes</strong><small>Búsqueda web cuando hace falta</small></p></div>
-          <div><span>03</span><p><strong>Revisa cómo respondió</strong><small>Método, evidencia y referencias visibles</small></p></div>
+          <div><span>01</span><p><strong>Pregunta en lenguaje natural</strong><small>Sobre normas, consultas abiertas o el mercado</small></p></div>
+          <div><span>02</span><p><strong>Recibe la cita exacta</strong><small>Resolución, artículo y vigencia</small></p></div>
+          <div><span>03</span><p><strong>Revisa cómo respondió</strong><small>Método, evidencia y datos visibles</small></p></div>
         </div>
         <div className="auth-story-foot"><span>COLOMBIA</span><span>ENERGÍA · REGULACIÓN · ANÁLISIS</span></div>
       </section>
 
       <section className="auth-form-side">
-        <div className="auth-form-wrap">
-          <span className="auth-overline">TU ESPACIO DE INVESTIGACIÓN</span>
-          <h2>{mode === "login" ? "Qué bueno verte." : "Crea tu espacio."}</h2>
-          <p className="auth-intro">{mode === "login" ? "Inicia sesión para continuar donde lo dejaste." : "Guarda tus documentos y consultas en un solo lugar."}</p>
+        {waiting ? <WaitlistConfirmation user={waiting} /> : <div className="auth-form-wrap">
+          <span className="auth-overline">{register && waitlist ? "BETA GRATUITA" : "TU ESPACIO DE INVESTIGACIÓN"}</span>
+          <h2>{heading}</h2>
+          <p className="auth-intro">{intro}</p>
 
           <form className="auth-form" onSubmit={onSubmit}>
-            {mode === "register" && <label>Nombre
+            {register && <label>Nombre
               <input name="display_name" type="text" autoComplete="name" minLength="2" maxLength="100" required placeholder="Tu nombre" />
             </label>}
             <label>Correo electrónico
               <input name="email" type="email" autoComplete="email" required placeholder="nombre@empresa.com" />
             </label>
             <label>Contraseña
-              <input name="password" type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} minLength={mode === "login" ? 1 : 12} maxLength="128" required placeholder={mode === "login" ? "Tu contraseña" : "Mínimo 12 caracteres"} />
+              <input name="password" type="password" autoComplete={register ? "new-password" : "current-password"} minLength={register ? 12 : 1} maxLength="128" required placeholder={register ? "Mínimo 12 caracteres" : "Tu contraseña"} />
             </label>
+            {register && <>
+              <div className="auth-form-row">
+                <label>Empresa <span className="auth-optional">opcional</span>
+                  <input name="company" type="text" autoComplete="organization" maxLength="150" placeholder="Dónde trabajas" />
+                </label>
+                <label>Perfil <span className="auth-optional">opcional</span>
+                  <select name="profile" defaultValue="">
+                    <option value="">Elige uno</option>
+                    {PROFILES.map((profile) => <option key={profile.id} value={profile.id}>{profile.label}</option>)}
+                  </select>
+                </label>
+              </div>
+              <label>¿Para qué lo usarías? <span className="auth-optional">opcional</span>
+                <textarea name="use_case" rows="2" maxLength="1000" placeholder="Ej. seguir las consultas de la CREG sobre comercialización" />
+              </label>
+            </>}
             {error && <p className="form-error" role="alert">{error}</p>}
             <button className="auth-submit" type="submit" disabled={mutation.isPending}>
-              {mutation.isPending ? "Un momento…" : mode === "login" ? "Iniciar sesión" : "Crear cuenta"}
+              {mutation.isPending ? "Un momento…" : register ? (waitlist ? "Unirme a la lista de espera" : "Crear cuenta") : "Iniciar sesión"}
               <Icon name="arrow" size={16} />
             </button>
           </form>
 
           <p className="auth-mode-switch">
-            {mode === "login" ? "¿Primera vez en EnerCol?" : "¿Ya tienes una cuenta?"}
-            <button type="button" onClick={() => { setMode(mode === "login" ? "register" : "login"); setError(""); }}>
-              {mode === "login" ? "Crear cuenta" : "Iniciar sesión"}
-            </button>
+            {register ? "¿Ya tienes acceso?" : "¿Primera vez en EnerCol?"}
+            <Link to={register ? "/ingresar" : "/registro"} state={location.state} onClick={() => setError("")}>
+              {register ? "Iniciar sesión" : waitlist ? "Unirme a la beta" : "Crear cuenta"}
+            </Link>
           </p>
-          {mode === "register" && <p className="auth-terms">Al crear una cuenta, aceptas que tus consultas y documentos se almacenen de forma privada en este espacio.</p>}
-        </div>
+          {register && <p className="auth-terms">Al registrarte, aceptas que tus consultas y documentos se almacenen de forma privada en este espacio.</p>}
+        </div>}
         <div className="auth-secure-note"><Icon name="lock" size={14} /> Acceso privado · Sesión protegida</div>
       </section>
     </main>

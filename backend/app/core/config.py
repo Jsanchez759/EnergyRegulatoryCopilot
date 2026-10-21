@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     DATABASE_POOL_SIZE: int = Field(default=5, ge=1, le=50)
     DATABASE_MAX_OVERFLOW: int = Field(default=10, ge=0, le=100)
 
+    # "waitlist" keeps new accounts out until an admin approves them.
+    REGISTRATION_MODE: Literal["open", "waitlist"] = "waitlist"
+
     SESSION_COOKIE_NAME: str = "enercol_session"
     SESSION_TTL_DAYS: int = Field(default=30, ge=1, le=90)
     SESSION_COOKIE_SECURE: bool = False
@@ -76,6 +79,7 @@ class Settings(BaseSettings):
     RATE_LIMIT_AUTH: str = "10/minute;50/hour"
     RATE_LIMIT_AGENT: str = "15/minute;300/day"
     RATE_LIMIT_UPLOAD: str = "20/hour"
+    RATE_LIMIT_PUBLIC: str = "60/minute"
     # Each series request may fan out to several XM calls (cached), so this is per user.
     RATE_LIMIT_MARKET: str = "60/minute;2000/day"
 

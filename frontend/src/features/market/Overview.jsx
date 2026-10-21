@@ -1,7 +1,7 @@
 import { useMarketOverview } from "./api";
 import { formatCompact } from "./format";
 
-function Sparkline({ chart }) {
+export function Sparkline({ chart }) {
   const values = chart.series[0]?.values || [];
   const points = values.map((value, index) => [index, value]).filter(([, value]) => value !== null && value !== undefined);
   if (points.length < 2) return null;
@@ -13,7 +13,7 @@ function Sparkline({ chart }) {
   return <svg className="market-spark" viewBox="0 0 100 30" preserveAspectRatio="none" aria-hidden="true"><path d={path} /></svg>;
 }
 
-function Change({ indicator }) {
+export function Change({ indicator }) {
   if (indicator.change === null || indicator.change === undefined) return null;
   const rounded = Math.round(indicator.change * 10) / 10;
   const arrow = rounded > 0 ? "▲" : rounded < 0 ? "▼" : "■";

@@ -1,24 +1,13 @@
 import { expect, test } from "@playwright/test";
 
+import { PASSWORD, signUp } from "./accounts";
 import { buildTextPdf } from "./pdf";
 
-const PASSWORD = "e2e-password-segura";
-
-async function register(page) {
-  const email = `e2e-${Date.now()}-${Math.random().toString(16).slice(2, 8)}@example.com`;
-  await page.goto("/");
-  await page.getByRole("button", { name: "Crear cuenta" }).click();
-  await page.getByLabel("Nombre").fill("Prueba E2E");
-  await page.getByLabel("Correo electrónico").fill(email);
-  await page.getByLabel("Contraseña").fill(PASSWORD);
-  await page.locator(".auth-submit").click();
-  await expect(page.locator(".new-chat-button")).toBeVisible();
-  return email;
-}
-
-test("register, sign out and sign back in", async ({ page }) => {
-  const email = await register(page);
+test("join the waitlist, get approved, sign out and sign back in", async ({ page }) => {
+  const email = await signUp(page);
   await page.getByRole("button", { name: "Salir" }).click();
+  await expect(page.getByRole("heading", { name: /La regulación y el mercado/ })).toBeVisible();
+  await page.getByRole("link", { name: "Iniciar sesión" }).click();
   await expect(page.getByRole("heading", { name: "Qué bueno verte." })).toBeVisible();
 
   await page.getByLabel("Correo electrónico").fill(email);
@@ -28,7 +17,7 @@ test("register, sign out and sign back in", async ({ page }) => {
 });
 
 test("conversation sidebar can be resized and remembers its width", async ({ page }) => {
-  await register(page);
+  await signUp(page);
   const pane = page.getByRole("complementary", { name: "Conversaciones" });
   const handle = page.getByRole("separator", { name: "Ajustar ancho del panel de conversaciones" });
   const before = (await pane.boundingBox()).width;
@@ -55,7 +44,7 @@ test("conversation sidebar can be resized and remembers its width", async ({ pag
 });
 
 test("upload a PDF and get a cited answer from it", async ({ page }) => {
-  await register(page);
+  await signUp(page);
 
   const pdf = buildTextPdf([
     "Resolucion CREG 999 de 2030 (documento de prueba E2E).",
@@ -99,7 +88,7 @@ test("upload a PDF and get a cited answer from it", async ({ page }) => {
 });
 
 test("general question is answered and persisted without document errors", async ({ page }) => {
-  await register(page);
+  await signUp(page);
   await page.getByLabel("Escribe tu consulta").fill("¿Qué es la CREG? Responde en dos frases.");
   await page.getByRole("button", { name: "Enviar consulta" }).click();
 

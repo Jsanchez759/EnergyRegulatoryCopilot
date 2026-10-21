@@ -6,8 +6,10 @@ API_PORT ?= 8000
 WEB_HOST ?= 127.0.0.1
 WEB_PORT ?= 5173
 API_BASE_URL ?= http://$(API_HOST):$(API_PORT)/api/v1
+E2E_ADMIN_EMAIL ?= e2e-admin@example.com
+E2E_ADMIN_PASSWORD ?= e2e-admin-password-segura
 
-.PHONY: help doctor setup sync lock db migrate dev backend serve frontend preview lint format format-check test e2e up down worker backfill crawl build check health
+.PHONY: help doctor setup sync lock db migrate dev backend serve frontend preview lint format format-check test e2e admin up down worker backfill crawl build check health
 
 help: ## Show available commands
 	@printf '\nEnerCol development commands\n\n'
@@ -84,7 +86,12 @@ down: ## Stop the Docker stack
 	docker compose down
 
 e2e: ## Run Playwright end-to-end tests against the running stack (make up first)
-	$(NPM) --prefix frontend run e2e
+	docker compose exec -T -e ENERCOL_ADMIN_PASSWORD=$(E2E_ADMIN_PASSWORD) api python -m app.cli admin $(E2E_ADMIN_EMAIL) --name "Admin E2E"
+	E2E_ADMIN_EMAIL=$(E2E_ADMIN_EMAIL) E2E_ADMIN_PASSWORD=$(E2E_ADMIN_PASSWORD) $(NPM) --prefix frontend run e2e
+
+admin: ## Create or promote an administrator: make admin EMAIL=you@example.com
+	@test -n "$(EMAIL)" || { echo "Usage: make admin EMAIL=you@example.com"; exit 1; }
+	docker compose exec api python -m app.cli admin $(EMAIL)
 
 build: ## Build the frontend for production
 	$(NPM) --prefix frontend run build

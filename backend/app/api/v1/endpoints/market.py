@@ -27,6 +27,7 @@ from app.schemas.market import (
 )
 from app.services.errors import ProviderUnavailableError
 from app.services.market_service import SINERGOX_URL, MarketDataError, MetricInfo
+from app.services.usage_service import record_usage, start_metering
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/market", tags=["market"], dependencies=[Depends(get_current_user)])
@@ -142,6 +143,8 @@ async def market_assistant(
     agent_service: AgentServiceDep,
     current: CurrentUserDep,
 ) -> AsyncIterator[ServerSentEvent]:
+    meter = start_metering("market", settings.OPENROUTER_CHAT_MODEL)
+    failed = False
     try:
         async for event in agent_service.stream_answer(
             payload.question,
@@ -152,10 +155,14 @@ async def market_assistant(
         ):
             yield ServerSentEvent(data=event)
     except ProviderUnavailableError as exc:
+        failed = True
         yield ServerSentEvent(data={"error": str(exc)})
         yield ServerSentEvent(data={"done": True})
     except Exception:
+        failed = True
         # The response is already streaming, so an unhandled error would just cut the connection.
         logger.exception("market assistant stream failed unexpectedly")
         yield ServerSentEvent(data={"error": "Ocurrió un error inesperado. Inténtalo de nuevo."})
         yield ServerSentEvent(data={"done": True})
+    finally:
+        await record_usage(meter, current.user.id, failed=failed)

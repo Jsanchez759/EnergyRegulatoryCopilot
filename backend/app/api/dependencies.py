@@ -31,6 +31,18 @@ async def get_current_user(request: Request, db: DbSessionDep) -> AuthenticatedU
 CurrentUserDep = Annotated[AuthenticatedUser, Depends(get_current_user)]
 
 
+async def get_current_admin(current: CurrentUserDep) -> AuthenticatedUser:
+    if current.user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo los administradores pueden ver esta sección.",
+        )
+    return current
+
+
+AdminDep = Annotated[AuthenticatedUser, Depends(get_current_admin)]
+
+
 def get_agent_service(request: Request) -> AgentService:
     return request.app.state.agent_service
 

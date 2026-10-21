@@ -7,10 +7,13 @@ const LINKS = [
   { to: "/mercado", label: "Mercado" },
 ];
 
-export default function PrimaryNav() {
+const ADMIN_LINK = { to: "/admin", label: "Administración" };
+
+export default function PrimaryNav({ user }) {
+  const links = user?.role === "admin" ? [...LINKS, ADMIN_LINK] : LINKS;
   return (
     <nav className="primary-nav" aria-label="Secciones">
-      {LINKS.map((link) => <NavLink key={link.to} to={link.to} end={link.end} className={({ isActive }) => `primary-nav-link ${isActive ? "is-active" : ""}`}>
+      {links.map((link) => <NavLink key={link.to} to={link.to} end={link.end} className={({ isActive }) => `primary-nav-link ${isActive ? "is-active" : ""}`}>
         {link.label}
       </NavLink>)}
     </nav>

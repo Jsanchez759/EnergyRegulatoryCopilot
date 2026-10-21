@@ -1,10 +1,30 @@
+from typing import Literal
+
 from pydantic import BaseModel, EmailStr, Field, field_validator
+
+Profile = Literal[
+    "comercializador",
+    "generador",
+    "red",
+    "consultoria",
+    "gobierno",
+    "academia",
+    "otro",
+]
 
 
 class RegisterRequest(BaseModel):
     display_name: str = Field(min_length=2, max_length=100)
     email: EmailStr = Field(max_length=254)
     password: str = Field(min_length=12, max_length=128)
+    company: str | None = Field(default=None, max_length=150)
+    profile: Profile | None = None
+    use_case: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("company", "use_case")
+    @classmethod
+    def blank_to_none(cls, value: str | None) -> str | None:
+        return (value or "").strip() or None
 
     @field_validator("display_name")
     @classmethod
@@ -24,6 +44,8 @@ class UserResponse(BaseModel):
     id: str
     display_name: str
     email: EmailStr
+    role: Literal["user", "admin"]
+    status: Literal["waitlist", "active", "suspended"]
     created_at: str
 
 

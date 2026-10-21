@@ -43,6 +43,7 @@ def digest_token(token: str) -> str:
 
 async def issue_session(db: AsyncSession, user: User) -> str:
     token = secrets.token_urlsafe(48)
+    user.last_login_at = datetime.now(UTC)
     await db.execute(
         delete(UserSession).where(
             UserSession.user_id == user.id, UserSession.expires_at <= datetime.now(UTC)
@@ -59,15 +60,30 @@ async def issue_session(db: AsyncSession, user: User) -> str:
     return token
 
 
-async def register_user(db: AsyncSession, display_name: str, email: str, password: str) -> User:
+async def register_user(
+    db: AsyncSession,
+    display_name: str,
+    email: str,
+    password: str,
+    *,
+    company: str | None = None,
+    profile: str | None = None,
+    use_case: str | None = None,
+) -> User:
     normalized_email = email.strip().casefold()
     existing = await db.scalar(select(User.id).where(User.email == normalized_email))
     if existing:
         raise DuplicateEmailError("Ya existe una cuenta con este correo electrónico.")
+    waitlist = settings.REGISTRATION_MODE == "waitlist"
     user = User(
         display_name=display_name.strip(),
         email=normalized_email,
         password_hash=hash_password(password),
+        status="waitlist" if waitlist else "active",
+        approved_at=None if waitlist else datetime.now(UTC),
+        company=company,
+        profile=profile,
+        use_case=use_case,
     )
     db.add(user)
     await db.commit()
@@ -100,6 +116,10 @@ async def current_session(db: AsyncSession, token: str) -> AuthenticatedUser | N
         await db.commit()
         return None
     user = await db.get(User, session.user_id)
-    if user is None:
+    if user is None or user.status != "active":
         return None
     return AuthenticatedUser(user=user, session=session, token=token)
+
+
+async def revoke_sessions(db: AsyncSession, user_id: str) -> None:
+    await db.execute(delete(UserSession).where(UserSession.user_id == user_id))
